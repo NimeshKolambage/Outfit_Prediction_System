@@ -1,12 +1,13 @@
 import cv2
 import numpy as np
-import os, math, glob
+import os, math, glob, sys
 import mediapipe_compat as mp
 
 # -------------------------
 # Config
 # -------------------------
-CAM_INDEX = 0
+# Camera index can be overridden with command-line argument: python app.py <camera_index>
+CAM_INDEX = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 SHIRT_DIR = "shirts"     # shirts folder
 PERSON_TH = 0.55         # segmentation threshold
 
@@ -38,9 +39,24 @@ if len(shirt_paths) == 0:
 
 def load_shirt(idx: int):
     path = shirt_paths[idx]
+    
+    # Validate file size (max 10MB)
+    file_size = os.path.getsize(path)
+    max_size_mb = 10
+    if file_size > max_size_mb * 1024 * 1024:
+        actual_size_mb = file_size / (1024 * 1024)
+        raise ValueError(f"[ERROR] Shirt file too large (max {max_size_mb}MB, got {actual_size_mb:.1f}MB): {path}")
+    
     img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
     if img is None:
         raise ValueError(f"[ERROR] Load wenne na: {path}")
+
+    # Validate dimensions (reasonable size limits)
+    h, w = img.shape[:2]
+    if w < 50 or h < 50:
+        raise ValueError(f"[ERROR] Image too small ({w}x{h}): {path}")
+    if w > 4000 or h > 4000:
+        raise ValueError(f"[ERROR] Image too large ({w}x{h}): {path}")
 
     # ensure RGBA
     if img.ndim == 3 and img.shape[2] == 3:
@@ -53,7 +69,28 @@ def load_shirt(idx: int):
     return img
 
 shirt_index = 0
-shirt_rgba = load_shirt(shirt_index)
+
+# Preload all shirt images at startup for better performance
+print("[INFO] Preloading shirt images...")
+valid_shirts = []
+shirt_cache = []
+for i, path in enumerate(shirt_paths):
+    try:
+        img = load_shirt(i)
+        valid_shirts.append(path)
+        shirt_cache.append(img)
+        print(f"  [{len(valid_shirts)}/{len(shirt_paths)}] Loaded: {os.path.basename(path)}")
+    except Exception as e:
+        print(f"  [ERROR] Failed to load {os.path.basename(path)}: {e}")
+
+# Update shirt_paths to only include valid shirts
+shirt_paths = valid_shirts
+
+if len(shirt_cache) == 0:
+    raise RuntimeError("[ERROR] No valid shirt images could be loaded")
+
+print(f"[OK] Loaded {len(shirt_cache)} shirt(s)")
+shirt_rgba = shirt_cache[shirt_index]
 
 # -------------------------
 # MediaPipe
@@ -88,6 +125,7 @@ def rotate_rgba(img_rgba, angle_deg):
 def soften_alpha_edges(rgba, sigma=1.2):
     out = rgba.copy()
     a = out[:, :, 3]
+    # Use (0, 0) so OpenCV derives the Gaussian kernel size from sigma
     a_blur = cv2.GaussianBlur(a, (0, 0), sigma)
     out[:, :, 3] = a_blur
     return out
@@ -197,19 +235,24 @@ def build_front_mask(seg_mask):
     front = cv2.dilate(front, k, iterations=1)
     return front
 
-# size stabilize helpers
-stable_size = "M"
-stable_count = 0
-
-def stabilize_size(current, stable, count, need_frames=8):
-    if current != stable:
-        count += 1
-        if count >= need_frames:
-            stable = current
-            count = 0
-    else:
-        count = 0
-    return stable, count
+# Size stabilization class to encapsulate state
+class SizeStabilizer:
+    """Encapsulates state for stabilizing size predictions over multiple frames"""
+    def __init__(self, initial_size="M", need_frames=8):
+        self.stable_size = initial_size
+        self.stable_count = 0
+        self.need_frames = need_frames
+    
+    def update(self, current_size):
+        """Update with new size detection and return stabilized size"""
+        if current_size != self.stable_size:
+            self.stable_count += 1
+            if self.stable_count >= self.need_frames:
+                self.stable_size = current_size
+                self.stable_count = 0
+        else:
+            self.stable_count = 0
+        return self.stable_size
 
 # -------------------------
 # Camera
@@ -217,6 +260,9 @@ def stabilize_size(current, stable, count, need_frames=8):
 cap = cv2.VideoCapture(CAM_INDEX)
 if not cap.isOpened():
     raise RuntimeError("[ERROR] Camera open wenne na. permission/other app camera use karanawada balanna.")
+
+# Initialize size stabilizer
+size_stabilizer = SizeStabilizer(initial_size="M", need_frames=STABLE_FRAMES)
 
 print("[OK] Running... Controls: [A] prev shirt | [D] next shirt | [Q]/[ESC] exit")
 
@@ -234,7 +280,7 @@ while True:
 
     pose_res = pose.process(rgb)
 
-    user_size = stable_size  # default
+    user_size = size_stabilizer.stable_size  # default
 
     if pose_res.pose_landmarks:
         h, w = frame.shape[:2]
@@ -260,8 +306,7 @@ while True:
             ratio = shoulder_w / (torso_h + 1e-6)
             predicted = "M" if ratio < RATIO_THRESHOLD else "L"
 
-            stable_size, stable_count = stabilize_size(predicted, stable_size, stable_count, need_frames=STABLE_FRAMES)
-            user_size = stable_size
+            user_size = size_stabilizer.update(predicted)
 
             preset = SIZE_PRESETS[user_size]
             width_scale = preset["width_scale"]
@@ -304,10 +349,10 @@ while True:
         break
     elif key in [ord('d'), ord('D')]:
         shirt_index = (shirt_index + 1) % len(shirt_paths)
-        shirt_rgba = load_shirt(shirt_index)
+        shirt_rgba = shirt_cache[shirt_index]
     elif key in [ord('a'), ord('A')]:
         shirt_index = (shirt_index - 1) % len(shirt_paths)
-        shirt_rgba = load_shirt(shirt_index)
+        shirt_rgba = shirt_cache[shirt_index]
 
 cap.release()
 cv2.destroyAllWindows()
