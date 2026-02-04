@@ -1,0 +1,15 @@
+# Python virtual environment
+venv/
+ENV/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local shirts/datasets (if they are large)
+virtual-tryon/shirts/
+
+# OS generated files
+.DS_Store
+Thumbs.db
