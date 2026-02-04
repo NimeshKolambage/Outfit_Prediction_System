@@ -4,7 +4,6 @@ Fallback to stub implementation when MediaPipe solutions is not available
 """
 
 import numpy as np
-import cv2
 
 # Try to import MediaPipe solutions, fall back to stub if not available
 try:
@@ -13,7 +12,6 @@ try:
     mp_seg_module = mp.solutions.selfie_segmentation
     HAS_MEDIAPIPE_SOLUTIONS = True
 except (ImportError, AttributeError):
-    print("[WARNING] MediaPipe solutions not available, using stub mode")
     HAS_MEDIAPIPE_SOLUTIONS = False
 
 class Landmark:
@@ -96,10 +94,16 @@ class Pose:
                 )
                 print("[OK] Using MediaPipe Pose detector")
             except Exception as e:
-                print(f"[WARNING] Failed to load MediaPipe Pose: {e}, using OpenCV fallback")
+                print(f"[ERROR] Failed to initialize MediaPipe Pose: {e}")
+                print("[HELP] To fix MediaPipe issues, try:")
+                print("       1. pip uninstall mediapipe")
+                print("       2. pip install mediapipe")
+                print("[WARNING] Falling back to OpenCV-based detection (shoulders/hips only)")
                 self.use_mediapipe = False
                 self.pose = None
         else:
+            if not HAS_MEDIAPIPE_SOLUTIONS:
+                print("[WARNING] MediaPipe solutions not available. Install with: pip install mediapipe")
             print("[WARNING] Using OpenCV-based fallback pose detection (shoulders/hips only)")
             self.pose = None
     
@@ -126,10 +130,16 @@ class SelfieSegmentation:
                 self.segmentation = mp_seg_module.SelfieSegmentation(model_selection=model_selection)
                 print("[OK] Using MediaPipe Segmentation")
             except Exception as e:
-                print(f"[WARNING] Failed to load MediaPipe Segmentation: {e}, using full mask")
+                print(f"[ERROR] Failed to initialize MediaPipe Segmentation: {e}")
+                print("[HELP] To fix MediaPipe issues, try:")
+                print("       1. pip uninstall mediapipe")
+                print("       2. pip install mediapipe")
+                print("[WARNING] Falling back to full foreground mask")
                 self.use_mediapipe = False
                 self.segmentation = None
         else:
+            if not HAS_MEDIAPIPE_SOLUTIONS:
+                print("[WARNING] MediaPipe solutions not available. Install with: pip install mediapipe")
             print("[WARNING] Using full foreground mask as fallback")
             self.segmentation = None
     
