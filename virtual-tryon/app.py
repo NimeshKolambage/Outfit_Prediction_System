@@ -42,8 +42,10 @@ def load_shirt(idx: int):
     
     # Validate file size (max 10MB)
     file_size = os.path.getsize(path)
-    if file_size > 10 * 1024 * 1024:
-        raise ValueError(f"[ERROR] Shirt file too large (>{file_size / (1024*1024):.1f}MB): {path}")
+    max_size_mb = 10
+    if file_size > max_size_mb * 1024 * 1024:
+        actual_size_mb = file_size / (1024 * 1024)
+        raise ValueError(f"[ERROR] Shirt file too large (max {max_size_mb}MB, got {actual_size_mb:.1f}MB): {path}")
     
     img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
     if img is None:
@@ -70,15 +72,19 @@ shirt_index = 0
 
 # Preload all shirt images at startup for better performance
 print("[INFO] Preloading shirt images...")
-shirt_cache = {}
+valid_shirts = []
+shirt_cache = []
 for i, path in enumerate(shirt_paths):
     try:
-        shirt_cache[i] = load_shirt(i)
-        print(f"  [{i+1}/{len(shirt_paths)}] Loaded: {os.path.basename(path)}")
+        img = load_shirt(i)
+        valid_shirts.append(path)
+        shirt_cache.append(img)
+        print(f"  [{len(valid_shirts)}/{len(shirt_paths)}] Loaded: {os.path.basename(path)}")
     except Exception as e:
         print(f"  [ERROR] Failed to load {os.path.basename(path)}: {e}")
-        # Remove failed paths
-        shirt_paths.pop(i)
+
+# Update shirt_paths to only include valid shirts
+shirt_paths = valid_shirts
 
 if len(shirt_cache) == 0:
     raise RuntimeError("[ERROR] No valid shirt images could be loaded")
