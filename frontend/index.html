@@ -1036,7 +1036,7 @@
                     <span>LIVE</span>
                 </div>
                 <div class="selected-clothing-badge" id="clothing-badge"></div>
-                
+
                 <!-- Gender Detection Badge -->
                 <div class="gender-badge" id="gender-badge">
                     <div class="label">Detected Gender</div>
@@ -1087,7 +1087,7 @@
     <script>
         // Flask Server Configuration
         const SERVER_URL = 'http://localhost:5000';
-        
+
         let genderUpdateInterval = null;
         let selectedClothingType = null;
         let isStreaming = false;
@@ -1159,14 +1159,14 @@
             try {
                 const response = await fetch(`${SERVER_URL}/api/gender`);
                 const data = await response.json();
-                
+
                 const gender = data.gender;
                 genderText.textContent = gender;
-                
+
                 // Update styling based on gender
                 genderValue.classList.remove('male', 'female');
                 confidenceFill.classList.remove('male', 'female');
-                
+
                 if (gender === 'Male') {
                     genderValue.classList.add('male');
                     confidenceFill.classList.add('male');
@@ -1199,24 +1199,24 @@
             try {
                 // Check if server is running
                 const status = await checkServerStatus();
-                
+
                 if (!status) {
                     throw new Error('Server not running');
                 }
 
                 // Set video feed source to Flask server MJPEG stream
                 videoFeed.src = `${SERVER_URL}/video_feed`;
-                
+
                 // Wait for image to load
                 videoFeed.onload = () => {
                     loading.classList.remove('active');
                     cameraContainer.style.display = 'block';
                     isStreaming = true;
-                    
+
                     // Start polling for gender updates
                     genderUpdateInterval = setInterval(updateGenderDisplay, 500);
                 };
-                
+
                 videoFeed.onerror = () => {
                     throw new Error('Failed to connect to video feed');
                 };
@@ -1224,7 +1224,7 @@
             } catch (error) {
                 console.error('Error starting camera:', error);
                 loading.classList.remove('active');
-                
+
                 if (error.message === 'Server not running') {
                     errorText.textContent = 'Server not running! Please start the server first:\n1. Open terminal in virtual-tryon folder\n2. Run: python server.py';
                 } else {
@@ -1236,17 +1236,17 @@
 
         function stopCamera() {
             isStreaming = false;
-            
+
             // Stop gender update polling
             if (genderUpdateInterval) {
                 clearInterval(genderUpdateInterval);
                 genderUpdateInterval = null;
             }
-            
+
             // Clear video source
             videoFeed.src = '';
             cameraContainer.style.display = 'none';
-            
+
             // Reset gender display
             genderText.textContent = 'Detecting...';
             document.querySelector('.gender-icon').textContent = '🔍';
