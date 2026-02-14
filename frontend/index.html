@@ -543,10 +543,76 @@
             z-index: 10;
         }
 
+        /* Gender Detection Badge */
+        .gender-badge {
+            position: absolute;
+            bottom: 24px;
+            left: 24px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 16px 24px;
+            border-radius: 12px;
+            z-index: 10;
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            min-width: 180px;
+        }
+
+        .gender-badge .label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 6px;
+        }
+
+        .gender-badge .gender-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .gender-badge .gender-value.male {
+            color: #60a5fa;
+        }
+
+        .gender-badge .gender-value.female {
+            color: #f472b6;
+        }
+
+        .gender-icon {
+            font-size: 28px;
+        }
+
+        .confidence-bar {
+            margin-top: 10px;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .confidence-bar .fill {
+            height: 100%;
+            background: var(--primary);
+            border-radius: 2px;
+            transition: width 0.3s ease;
+        }
+
+        .confidence-bar .fill.male {
+            background: #60a5fa;
+        }
+
+        .confidence-bar .fill.female {
+            background: #f472b6;
+        }
+
         #video-feed {
             width: 100%;
             display: block;
-            transform: scaleX(-1);
             border-radius: 24px;
             aspect-ratio: 16/9;
             object-fit: cover;
@@ -955,26 +1021,38 @@
     <!-- Camera Section -->
     <section class="camera-section" id="camera-section">
         <h2>Virtual Try-On</h2>
-        <p class="section-subtitle">Position yourself in the frame and start exploring styles</p>
+        <p class="section-subtitle">Position yourself in the frame — AI will detect your gender in real-time</p>
 
         <div class="loading" id="loading">
             <div class="spinner"></div>
-            <p>Initializing your camera...</p>
+            <p>Connecting to camera server...</p>
         </div>
 
         <div class="camera-wrapper">
             <div class="camera-container" id="camera-container" style="display: none;">
-                <video id="video-feed" autoplay playsinline></video>
+                <img id="video-feed" src="" alt="Video Feed">
                 <div class="camera-overlay">
                     <div class="live-dot"></div>
                     <span>LIVE</span>
                 </div>
                 <div class="selected-clothing-badge" id="clothing-badge"></div>
+
+                <!-- Gender Detection Badge -->
+                <div class="gender-badge" id="gender-badge">
+                    <div class="label">Detected Gender</div>
+                    <div class="gender-value" id="gender-value">
+                        <span class="gender-icon">🔍</span>
+                        <span id="gender-text">Detecting...</span>
+                    </div>
+                    <div class="confidence-bar">
+                        <div class="fill" id="confidence-fill" style="width: 0%"></div>
+                    </div>
+                </div>
             </div>
         </div>
 
         <div class="error-message" id="error-message">
-            <p>Unable to access camera. Please grant camera permissions and try again.</p>
+            <p id="error-text">Unable to connect to server. Make sure the server is running (python server.py)</p>
         </div>
 
         <div class="camera-controls">
@@ -1007,18 +1085,26 @@
     </footer>
 
     <script>
-        let videoStream = null;
-        let selectedClothingType = null;
+        // Flask Server Configuration
+        const SERVER_URL = 'http://localhost:5000';
 
-        const video = document.getElementById('video-feed');
+        let genderUpdateInterval = null;
+        let selectedClothingType = null;
+        let isStreaming = false;
+
+        const videoFeed = document.getElementById('video-feed');
         const landingSection = document.getElementById('landing');
         const cameraSection = document.getElementById('camera-section');
         const cameraContainer = document.getElementById('camera-container');
         const loading = document.getElementById('loading');
         const errorMessage = document.getElementById('error-message');
+        const errorText = document.getElementById('error-text');
         const clothingModal = document.getElementById('clothing-modal');
         const btnContinue = document.getElementById('btn-continue');
         const clothingBadge = document.getElementById('clothing-badge');
+        const genderValue = document.getElementById('gender-value');
+        const genderText = document.getElementById('gender-text');
+        const confidenceFill = document.getElementById('confidence-fill');
 
         const clothingLabels = {
             'tshirt': 'T-Shirt',
@@ -1059,6 +1145,49 @@
             startCamera();
         }
 
+        async function checkServerStatus() {
+            try {
+                const response = await fetch(`${SERVER_URL}/api/status`);
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                return null;
+            }
+        }
+
+        async function updateGenderDisplay() {
+            try {
+                const response = await fetch(`${SERVER_URL}/api/gender`);
+                const data = await response.json();
+
+                const gender = data.gender;
+                genderText.textContent = gender;
+
+                // Update styling based on gender
+                genderValue.classList.remove('male', 'female');
+                confidenceFill.classList.remove('male', 'female');
+
+                if (gender === 'Male') {
+                    genderValue.classList.add('male');
+                    confidenceFill.classList.add('male');
+                    document.querySelector('.gender-icon').textContent = '👨';
+                    confidenceFill.style.width = '85%';
+                } else if (gender === 'Female') {
+                    genderValue.classList.add('female');
+                    confidenceFill.classList.add('female');
+                    document.querySelector('.gender-icon').textContent = '👩';
+                    confidenceFill.style.width = '85%';
+                } else {
+                    document.querySelector('.gender-icon').textContent = '🔍';
+                    confidenceFill.style.width = '0%';
+                }
+            } catch (error) {
+                genderText.textContent = 'Server disconnected';
+                document.querySelector('.gender-icon').textContent = '⚠️';
+                confidenceFill.style.width = '0%';
+            }
+        }
+
         async function startCamera() {
             // Show camera section and hide landing
             landingSection.style.display = 'none';
@@ -1068,39 +1197,61 @@
             cameraContainer.style.display = 'none';
 
             try {
-                // Request camera access
-                videoStream = await navigator.mediaDevices.getUserMedia({
-                    video: {
-                        width: { ideal: 1280 },
-                        height: { ideal: 720 },
-                        facingMode: 'user'
-                    },
-                    audio: false
-                });
+                // Check if server is running
+                const status = await checkServerStatus();
 
-                // Set video source
-                video.srcObject = videoStream;
+                if (!status) {
+                    throw new Error('Server not running');
+                }
 
-                // Wait for video to be ready
-                video.onloadedmetadata = () => {
+                // Set video feed source to Flask server MJPEG stream
+                videoFeed.src = `${SERVER_URL}/video_feed`;
+
+                // Wait for image to load
+                videoFeed.onload = () => {
                     loading.classList.remove('active');
                     cameraContainer.style.display = 'block';
+                    isStreaming = true;
+
+                    // Start polling for gender updates
+                    genderUpdateInterval = setInterval(updateGenderDisplay, 500);
+                };
+
+                videoFeed.onerror = () => {
+                    throw new Error('Failed to connect to video feed');
                 };
 
             } catch (error) {
-                console.error('Error accessing camera:', error);
+                console.error('Error starting camera:', error);
                 loading.classList.remove('active');
+
+                if (error.message === 'Server not running') {
+                    errorText.textContent = 'Server not running! Please start the server first:\n1. Open terminal in virtual-tryon folder\n2. Run: python server.py';
+                } else {
+                    errorText.textContent = 'Unable to connect to camera server. Please check if the server is running.';
+                }
                 errorMessage.classList.add('active');
             }
         }
 
         function stopCamera() {
-            if (videoStream) {
-                videoStream.getTracks().forEach(track => track.stop());
-                videoStream = null;
-                video.srcObject = null;
+            isStreaming = false;
+
+            // Stop gender update polling
+            if (genderUpdateInterval) {
+                clearInterval(genderUpdateInterval);
+                genderUpdateInterval = null;
             }
+
+            // Clear video source
+            videoFeed.src = '';
             cameraContainer.style.display = 'none';
+
+            // Reset gender display
+            genderText.textContent = 'Detecting...';
+            document.querySelector('.gender-icon').textContent = '🔍';
+            confidenceFill.style.width = '0%';
+            genderValue.classList.remove('male', 'female');
         }
 
         function showLanding() {
