@@ -3,7 +3,7 @@ venv/
 ENV/
 env/
 
-datasets/UTKFace/
+datasets/
 
 # Python cache
 __pycache__/
