@@ -281,63 +281,113 @@ while True:
     pose_res = pose.process(rgb)
 
     user_size = size_stabilizer.stable_size  # default
+    
+    # Detect if current item is pants/shorts or shirt by filename
+    current_filename = os.path.basename(shirt_paths[shirt_index]).lower()
+    is_pant_or_short = 'pant' in current_filename or 'short' in current_filename
 
     if pose_res.pose_landmarks:
         h, w = frame.shape[:2]
         lm = pose_res.pose_landmarks.landmark
 
+        # Get all landmarks
         ls = lm[mp_pose.LEFT_SHOULDER]
         rs = lm[mp_pose.RIGHT_SHOULDER]
         lh = lm[mp_pose.LEFT_HIP]
         rh = lm[mp_pose.RIGHT_HIP]
+        lk = lm[mp_pose.LEFT_KNEE]
+        rk = lm[mp_pose.RIGHT_KNEE]
 
         lsx, lsy = int(ls.x * w), int(ls.y * h)
         rsx, rsy = int(rs.x * w), int(rs.y * h)
-        lhy = int(lh.y * h)
-        rhy = int(rh.y * h)
+        lhx, lhy = int(lh.x * w), int(lh.y * h)
+        rhx, rhy = int(rh.x * w), int(rh.y * h)
+        lky = int(lk.y * h)
+        rky = int(rk.y * h)
 
-        shoulder_w = int(math.hypot(lsx - rsx, lsy - rsy))
-        torso_h = int(((lhy + rhy) // 2) - ((lsy + rsy) // 2))
+        if is_pant_or_short:
+            # ===== PANTS/SHORTS: Align to hips =====
+            hip_w = int(math.hypot(lhx - rhx, lhy - rhy))
+            leg_h = int(((lky + rky) // 2) - ((lhy + rhy) // 2))
 
-        if shoulder_w > 30 and torso_h > 30:
-            # -------------------------
-            # Predict user size (M/L) ratio-based
-            # -------------------------
-            ratio = shoulder_w / (torso_h + 1e-6)
-            predicted = "M" if ratio < RATIO_THRESHOLD else "L"
+            if hip_w > 30 and leg_h > 30:
+                # Predict user size (M/L) ratio-based on hip/leg ratio
+                ratio = hip_w / (leg_h + 1e-6)
+                predicted = "M" if ratio < RATIO_THRESHOLD else "L"
 
-            user_size = size_stabilizer.update(predicted)
+                user_size = size_stabilizer.update(predicted)
 
-            preset = SIZE_PRESETS[user_size]
-            width_scale = preset["width_scale"]
-            height_scale = preset["height_scale"]
-            y_lift = preset["y_lift"]
+                preset = SIZE_PRESETS[user_size]
+                width_scale = preset["width_scale"]
+                height_scale = preset["height_scale"]
+                y_lift = preset["y_lift"]
 
-            # angle from shoulders
-            angle_rad = math.atan2(lsy - rsy, lsx - rsx)
-            angle_deg = -math.degrees(angle_rad)
+                # angle from hips
+                angle_rad = math.atan2(lhy - rhy, lhx - rhx)
+                angle_deg = -math.degrees(angle_rad)
 
-            target_w = int(shoulder_w * width_scale)
-            target_h = int(torso_h * height_scale)
+                target_w = int(hip_w * width_scale)
+                target_h = int(leg_h * height_scale)
 
-            shirt_resized = cv2.resize(shirt_rgba, (target_w, target_h), interpolation=cv2.INTER_AREA)
-            shirt_rot = rotate_rgba(shirt_resized, angle_deg)
+                clothing_resized = cv2.resize(shirt_rgba, (target_w, target_h), interpolation=cv2.INTER_AREA)
+                clothing_rot = rotate_rgba(clothing_resized, angle_deg)
 
-            cx = (lsx + rsx) // 2
-            cy = (lsy + rsy) // 2
+                cx = (lhx + rhx) // 2
+                cy = (lhy + rhy) // 2
 
-            x = cx - shirt_rot.shape[1] // 2
-            y = cy - int(shirt_rot.shape[0] * y_lift)
+                x = cx - clothing_rot.shape[1] // 2
+                y = cy - int(clothing_rot.shape[0] * y_lift)
 
-            # Realism upgrades
-            shirt_rot = soften_alpha_edges(shirt_rot, sigma=EDGE_SOFTEN_SIGMA)
-            shirt_rot = match_lighting(shirt_rot, frame, x, y, light_min=LIGHT_MIN, light_max=LIGHT_MAX)
-            shirt_rot = apply_shadow_from_body(shirt_rot, frame, x, y, strength=SHADOW_STRENGTH)
+                # Realism upgrades
+                clothing_rot = soften_alpha_edges(clothing_rot, sigma=EDGE_SOFTEN_SIGMA)
+                clothing_rot = match_lighting(clothing_rot, frame, x, y, light_min=LIGHT_MIN, light_max=LIGHT_MAX)
+                clothing_rot = apply_shadow_from_body(clothing_rot, frame, x, y, strength=SHADOW_STRENGTH)
 
-            frame = overlay_rgba(frame, shirt_rot, x, y, front_mask=front_mask)
+                frame = overlay_rgba(frame, clothing_rot, x, y, front_mask=front_mask)
+
+        else:
+            # ===== SHIRTS: Align to shoulders =====
+            shoulder_w = int(math.hypot(lsx - rsx, lsy - rsy))
+            torso_h = int(((lhy + rhy) // 2) - ((lsy + rsy) // 2))
+
+            if shoulder_w > 30 and torso_h > 30:
+                # Predict user size (M/L) ratio-based
+                ratio = shoulder_w / (torso_h + 1e-6)
+                predicted = "M" if ratio < RATIO_THRESHOLD else "L"
+
+                user_size = size_stabilizer.update(predicted)
+
+                preset = SIZE_PRESETS[user_size]
+                width_scale = preset["width_scale"]
+                height_scale = preset["height_scale"]
+                y_lift = preset["y_lift"]
+
+                # angle from shoulders
+                angle_rad = math.atan2(lsy - rsy, lsx - rsx)
+                angle_deg = -math.degrees(angle_rad)
+
+                target_w = int(shoulder_w * width_scale)
+                target_h = int(torso_h * height_scale)
+
+                shirt_resized = cv2.resize(shirt_rgba, (target_w, target_h), interpolation=cv2.INTER_AREA)
+                shirt_rot = rotate_rgba(shirt_resized, angle_deg)
+
+                cx = (lsx + rsx) // 2
+                cy = (lsy + rsy) // 2
+
+                x = cx - shirt_rot.shape[1] // 2
+                y = cy - int(shirt_rot.shape[0] * y_lift)
+
+                # Realism upgrades
+                shirt_rot = soften_alpha_edges(shirt_rot, sigma=EDGE_SOFTEN_SIGMA)
+                shirt_rot = match_lighting(shirt_rot, frame, x, y, light_min=LIGHT_MIN, light_max=LIGHT_MAX)
+                shirt_rot = apply_shadow_from_body(shirt_rot, frame, x, y, strength=SHADOW_STRENGTH)
+
+                frame = overlay_rgba(frame, shirt_rot, x, y, front_mask=front_mask)
 
     # UI text
-    label = f"Shirt: {os.path.basename(shirt_paths[shirt_index])}  (A/D change)"
+    item_type = "Pant/Short" if is_pant_or_short else "Shirt"
+    label = f"{item_type}: {os.path.basename(shirt_paths[shirt_index])}  (A/D change)"
     cv2.putText(frame, label, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2, cv2.LINE_AA)
     cv2.putText(frame, f"Predicted Size: {user_size}", (15, 65),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 2, cv2.LINE_AA)
