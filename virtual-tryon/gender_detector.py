@@ -204,39 +204,20 @@ class GenderDetector:
         return results
     
     def draw_results(self, frame, results):
-        """Draw detection results on frame"""
-        for result in results:
-            x, y, w, h = result['rect']
-            gender = result['gender']
-            confidence = result['confidence']
+        """Draw gender label on frame (no face box)"""
+        if results:
+            gender = results[0]['gender']
+            label = f"Gender - {gender}"
             
             # Choose color based on gender
             if gender == "Male":
-                color = (255, 150, 50)  # Blue-ish for male
+                color = (255, 150, 50)  # Blue for male
             else:
-                color = (180, 50, 255)  # Pink-ish for female
+                color = (180, 50, 255)  # Pink for female
             
-            # Draw bounding box
-            cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-            
-            # Draw label background
-            label = f"{gender}: {confidence*100:.1f}%"
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.7
-            thickness = 2
-            
-            (text_w, text_h), baseline = cv2.getTextSize(label, font, font_scale, thickness)
-            
-            # Background rectangle
-            cv2.rectangle(frame, 
-                         (x, y - text_h - 10), 
-                         (x + text_w + 10, y), 
-                         color, -1)
-            
-            # Text
-            cv2.putText(frame, label, 
-                       (x + 5, y - 5), 
-                       font, font_scale, (255, 255, 255), thickness)
+            # Draw simple text at bottom left
+            cv2.putText(frame, label, (10, frame.shape[0] - 20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
         
         return frame
 
