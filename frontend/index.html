@@ -66,33 +66,17 @@
             width: 100%;
             top: 0;
             z-index: 1000;
-            background: rgba(0, 0, 0, 0.9);
-            backdrop-filter: blur(20px);
-            border-bottom: 1px solid var(--border);
+            background: transparent;
         }
-
-        .logo {
-            font-size: 24px;
-            font-weight: 800;
-            color: var(--primary-light);
-            letter-spacing: -0.5px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-
-
-
 
         /* YouTube Video Background Section */
         .video-hero {
             position: relative;
             width: 100%;
-            height: 60vh;
+            height: 70vh;
             min-height: 400px;
             overflow: hidden;
-            margin-top: 73px;
+            margin-top: 0;
         }
 
         .video-hero iframe {
@@ -128,6 +112,7 @@
             justify-content: center;
             text-align: center;
             padding: 40px;
+            padding-top: 80px;
         }
 
         .video-content h1 {
@@ -587,29 +572,6 @@
             font-size: 28px;
         }
 
-        .confidence-bar {
-            margin-top: 10px;
-            height: 4px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 2px;
-            overflow: hidden;
-        }
-
-        .confidence-bar .fill {
-            height: 100%;
-            background: var(--primary);
-            border-radius: 2px;
-            transition: width 0.3s ease;
-        }
-
-        .confidence-bar .fill.male {
-            background: #60a5fa;
-        }
-
-        .confidence-bar .fill.female {
-            background: #f472b6;
-        }
-
         #video-feed {
             width: 100%;
             display: block;
@@ -827,8 +789,8 @@
 <body>
     <!-- Navigation -->
     <nav>
-        <div class="logo">
-            WearMe
+        <div>
+            <img src="../assets/wearme.png" alt="WearMe Logo" style="height: 35px; width: auto;">
         </div>
     </nav>
 
@@ -1021,7 +983,7 @@
     <!-- Camera Section -->
     <section class="camera-section" id="camera-section">
         <h2>Virtual Try-On</h2>
-        <p class="section-subtitle">Position yourself in the frame — AI will detect your gender in real-time</p>
+        <p class="section-subtitle">Position yourself in the frame — AI will overlay clothing and detect your gender</p>
 
         <div class="loading" id="loading">
             <div class="spinner"></div>
@@ -1037,15 +999,12 @@
                 </div>
                 <div class="selected-clothing-badge" id="clothing-badge"></div>
 
-                <!-- Gender Detection Badge -->
+                <!-- Gender Badge -->
                 <div class="gender-badge" id="gender-badge">
-                    <div class="label">Detected Gender</div>
+                    <div class="label">Gender</div>
                     <div class="gender-value" id="gender-value">
                         <span class="gender-icon">🔍</span>
                         <span id="gender-text">Detecting...</span>
-                    </div>
-                    <div class="confidence-bar">
-                        <div class="fill" id="confidence-fill" style="width: 0%"></div>
                     </div>
                 </div>
             </div>
@@ -1056,6 +1015,20 @@
         </div>
 
         <div class="camera-controls">
+            <button class="btn-control" onclick="prevShirt()">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M15 18l-6-6 6-6" />
+                </svg>
+                Prev Shirt
+            </button>
+            <button class="btn-control" onclick="nextShirt()">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9 18l6-6-6-6" />
+                </svg>
+                Next Shirt
+            </button>
             <button class="btn-control stop" onclick="stopCamera()">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
                     <rect x="6" y="6" width="12" height="12" rx="2" />
@@ -1091,6 +1064,7 @@
         let genderUpdateInterval = null;
         let selectedClothingType = null;
         let isStreaming = false;
+        let tryonUpdateInterval = null;
 
         const videoFeed = document.getElementById('video-feed');
         const landingSection = document.getElementById('landing');
@@ -1104,7 +1078,6 @@
         const clothingBadge = document.getElementById('clothing-badge');
         const genderValue = document.getElementById('gender-value');
         const genderText = document.getElementById('gender-text');
-        const confidenceFill = document.getElementById('confidence-fill');
 
         const clothingLabels = {
             'tshirt': 'T-Shirt',
@@ -1165,26 +1138,19 @@
 
                 // Update styling based on gender
                 genderValue.classList.remove('male', 'female');
-                confidenceFill.classList.remove('male', 'female');
 
                 if (gender === 'Male') {
                     genderValue.classList.add('male');
-                    confidenceFill.classList.add('male');
                     document.querySelector('.gender-icon').textContent = '👨';
-                    confidenceFill.style.width = '85%';
                 } else if (gender === 'Female') {
                     genderValue.classList.add('female');
-                    confidenceFill.classList.add('female');
                     document.querySelector('.gender-icon').textContent = '👩';
-                    confidenceFill.style.width = '85%';
                 } else {
                     document.querySelector('.gender-icon').textContent = '🔍';
-                    confidenceFill.style.width = '0%';
                 }
             } catch (error) {
                 genderText.textContent = 'Server disconnected';
                 document.querySelector('.gender-icon').textContent = '⚠️';
-                confidenceFill.style.width = '0%';
             }
         }
 
@@ -1204,8 +1170,8 @@
                     throw new Error('Server not running');
                 }
 
-                // Set video feed source to Flask server MJPEG stream
-                videoFeed.src = `${SERVER_URL}/video_feed`;
+                // Set video feed source to Flask server MJPEG try-on stream
+                videoFeed.src = `${SERVER_URL}/tryon_feed`;
 
                 // Wait for image to load
                 videoFeed.onload = () => {
@@ -1215,6 +1181,7 @@
 
                     // Start polling for gender updates
                     genderUpdateInterval = setInterval(updateGenderDisplay, 500);
+                    tryonUpdateInterval = setInterval(updateTryOnStatus, 500);
                 };
 
                 videoFeed.onerror = () => {
@@ -1243,6 +1210,11 @@
                 genderUpdateInterval = null;
             }
 
+            if (tryonUpdateInterval) {
+                clearInterval(tryonUpdateInterval);
+                tryonUpdateInterval = null;
+            }
+
             // Clear video source
             videoFeed.src = '';
             cameraContainer.style.display = 'none';
@@ -1250,8 +1222,45 @@
             // Reset gender display
             genderText.textContent = 'Detecting...';
             document.querySelector('.gender-icon').textContent = '🔍';
-            confidenceFill.style.width = '0%';
             genderValue.classList.remove('male', 'female');
+            clothingBadge.textContent = '';
+        }
+
+        async function updateTryOnStatus() {
+            if (!isStreaming) return;
+            try {
+                const response = await fetch(`${SERVER_URL}/api/tryon/status`);
+                const data = await response.json();
+                const label = `${data.item_type}: ${data.filename} | Size: ${data.user_size}`;
+                clothingBadge.textContent = label;
+            } catch (e) {
+                // Ignore network errors while streaming
+            }
+        }
+
+        async function nextShirt() {
+            try {
+                await fetch(`${SERVER_URL}/api/tryon/next`);
+                updateTryOnStatus();
+            } catch (e) { }
+        }
+
+        async function prevShirt() {
+            try {
+                await fetch(`${SERVER_URL}/api/tryon/prev`);
+                updateTryOnStatus();
+            } catch (e) { }
+        }
+
+        async function reloadClothing() {
+            try {
+                const response = await fetch(`${SERVER_URL}/api/tryon/reload`);
+                const data = await response.json();
+                alert(`Reloaded ${data.count} clothing items:\n${data.items.join(', ')}`);
+                updateTryOnStatus();
+            } catch (e) {
+                alert('Failed to reload clothing. Is the server running?');
+            }
         }
 
         function showLanding() {

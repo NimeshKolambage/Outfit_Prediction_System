@@ -16,6 +16,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from gender_detector import GenderDetector
+from tryon_engine import TryOnEngine
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend access
@@ -26,6 +27,12 @@ camera_lock = threading.Lock()
 gender_detector = None
 current_gender = "Detecting..."
 is_running = False
+tryon_engine = None
+current_tryon = {
+    "filename": "",
+    "user_size": "M",
+    "item_type": "Shirt",
+}
 
 # Configuration
 CAM_INDEX = int(sys.argv[1]) if len(sys.argv) > 1 else 0
@@ -63,8 +70,8 @@ def release_camera():
 
 
 def generate_frames():
-    """Generate video frames with gender detection overlay"""
-    global current_gender, is_running
+    """Generate video frames with try-on and gender detection overlay"""
+    global current_gender, is_running, current_tryon
     
     is_running = True
     
@@ -86,25 +93,52 @@ def generate_frames():
         # Mirror the frame for selfie view
         frame = cv2.flip(frame, 1)
         
+        # Try-on overlay
+        if tryon_engine is not None:
+            frame, info = tryon_engine.process_frame(frame)
+            current_tryon = info
+
+            label = f"{info['item_type']}: {info['filename']}"
+            cv2.putText(frame, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(
+                frame,
+                f"Predicted Size: {info['user_size']}",
+                (10, 60),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 255, 0),
+                2,
+            )
+
         # Detect gender
         if gender_detector is not None and gender_detector.model_loaded:
             results = gender_detector.detect_gender(frame)
             frame = gender_detector.draw_results(frame, results)
-            
-            # Update current gender for API
+
             if results:
                 current_gender = results[0]['gender']
             else:
                 current_gender = "No face detected"
         else:
             current_gender = "Model not loaded"
-            # Draw message on frame
-            cv2.putText(frame, "Gender model not loaded", 
-                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
-                       0.7, (0, 0, 255), 2)
-            cv2.putText(frame, "Run: python train_gender_model.py", 
-                       (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 
-                       0.6, (0, 165, 255), 2)
+            cv2.putText(
+                frame,
+                "Gender model not loaded",
+                (10, 90),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 0, 255),
+                2,
+            )
+            cv2.putText(
+                frame,
+                "Run: python train_gender_model.py",
+                (10, 115),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (0, 165, 255),
+                2,
+            )
         
         # Add timestamp overlay
         timestamp = time.strftime("%H:%M:%S")
@@ -171,14 +205,14 @@ def index():
         <p class="status">Server is running on port 5000</p>
         
         <div class="video-container">
-            <img src="/video_feed" width="640" height="480" alt="Video Feed">
+            <img src="/tryon_feed" width="640" height="480" alt="Video Feed">
         </div>
         
         <p id="gender-status">Current Gender: Loading...</p>
         
         <div class="info">
             <p>API Endpoints:</p>
-            <p><code>/video_feed</code> - MJPEG video stream</p>
+            <p><code>/tryon_feed</code> - MJPEG video stream</p>
             <p><code>/api/gender</code> - Current gender detection result</p>
             <p><code>/api/status</code> - Server status</p>
         </div>
@@ -198,9 +232,9 @@ def index():
     ''')
 
 
-@app.route('/video_feed')
-def video_feed():
-    """Video streaming route"""
+@app.route('/tryon_feed')
+def tryon_feed():
+    """Try-on video streaming route"""
     return Response(
         generate_frames(),
         mimetype='multipart/x-mixed-replace; boundary=frame'
@@ -226,6 +260,47 @@ def get_status():
     })
 
 
+@app.route('/api/tryon/status')
+def get_tryon_status():
+    """API endpoint to get current try-on state"""
+    return jsonify({
+        'filename': current_tryon.get('filename', ''),
+        'user_size': current_tryon.get('user_size', 'M'),
+        'item_type': current_tryon.get('item_type', 'Shirt')
+    })
+
+
+@app.route('/api/tryon/next')
+def tryon_next():
+    if tryon_engine is not None:
+        tryon_engine.next_shirt()
+    return jsonify({'status': 'ok'})
+
+
+@app.route('/api/tryon/prev')
+def tryon_prev():
+    if tryon_engine is not None:
+        tryon_engine.prev_shirt()
+    return jsonify({'status': 'ok'})
+
+
+@app.route('/api/tryon/reload')
+def tryon_reload():
+    """Reload clothing from folder (after adding/deleting files)"""
+    if tryon_engine is not None:
+        count = tryon_engine.reload_clothing()
+        return jsonify({'status': 'ok', 'count': count, 'items': tryon_engine.get_clothing_list()})
+    return jsonify({'status': 'error', 'message': 'Engine not loaded'})
+
+
+@app.route('/api/tryon/list')
+def tryon_list():
+    """Get list of all available clothing items"""
+    if tryon_engine is not None:
+        return jsonify({'items': tryon_engine.get_clothing_list(), 'count': len(tryon_engine.shirt_cache)})
+    return jsonify({'items': [], 'count': 0})
+
+
 @app.route('/api/start')
 def start_stream():
     """Start the video stream"""
@@ -246,7 +321,7 @@ def stop_stream():
 
 
 def main():
-    global gender_detector
+    global gender_detector, tryon_engine
     
     print("=" * 50)
     print("Gender Detection Server")
@@ -255,6 +330,9 @@ def main():
     # Initialize gender detector
     print("\n[INFO] Loading gender detection model...")
     gender_detector = GenderDetector()
+
+    print("\n[INFO] Loading try-on engine...")
+    tryon_engine = TryOnEngine(shirt_dir="shirts")
     
     if not gender_detector.model_loaded:
         print("\n[WARNING] Gender model not found!")
