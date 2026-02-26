@@ -235,6 +235,34 @@ class TryOnEngine:
 
     SUPPORTED_FORMATS = ['*.png', '*.jpg', '*.jpeg', '*.webp', '*.bmp']
 
+    def _validate_distance(self, shoulder_w_px):
+        """
+        Validate user is at EXACTLY 6 feet (5.8-6.2 ft tolerance).
+        Returns: (is_valid: bool, msg: str, color: str)
+        Color: "red" or "green" for display
+        """
+        if shoulder_w_px is None or shoulder_w_px <= 0:
+            return False, "Move into frame (shoulders not detected)", "red"
+        
+        # Calibration: at 6 feet, shoulder width ≈ 145-155 px on typical webcam
+        # Approximate conversion: distance_ft ≈ (shoulder_width_inches * focal_length) / shoulder_px
+        # For standard setup: ~6ft → ~150px
+        target_px = 100  # pixels at 6 feet
+        px_tolerance = 15  # ±15px = roughly ±0.3 feet
+        
+        min_px = target_px - px_tolerance  # 135px ≈ 5.8 ft
+        max_px = target_px + px_tolerance  # 165px ≈ 6.2 ft
+        
+        if shoulder_w_px < min_px:
+            # Too far
+            return False, "TOO FAR - Move closer to 6 feet", "red"
+        if shoulder_w_px > max_px:
+            # Too close
+            return False, "TOO CLOSE - Move back to 6 feet", "red"
+        
+        # Perfect distance
+        return True, "Distance OK (6 feet) - Size Locked ✓", "green"
+
     def __init__(self, shirt_dir="shirts"):
         self.shirt_dir = shirt_dir
         self.shirt_paths = []
@@ -255,6 +283,17 @@ class TryOnEngine:
         self.size_locked = False  # Flag to track if size is locked
         self.display_state = "STANDBY"  # STANDBY, COUNTDOWN, DETECTING, READY
         self.distance_warning = ""  # Distance validation message
+        self.distance_warning_color = "white"  # Color for warning text
+        
+        # Distance validation states
+        self.is_distance_valid = False  # True only when at exactly 6 feet
+        self.is_size_locked = False  # True after size is detected once
+        
+        # Locked sizes (both shirt and pant)
+        self.locked_shirt_size = None
+        self.locked_pant_size = None
+        self.lock_start_time = None  # When sizes were locked
+        self.auto_reset_timeout = 30 * 60  # 30 minutes in seconds
 
         self._load_clothing()
 
@@ -311,20 +350,29 @@ class TryOnEngine:
             raise ValueError("Unsupported format")
 
         return img
+    
 
     def next_shirt(self):
         self.shirt_index = (self.shirt_index + 1) % len(self.shirt_cache)
         self.smoother.reset()
         self.locked_size = None  # Reset locked size when changing shirt
+        self.locked_shirt_size = None
+        self.locked_pant_size = None
+        self.lock_start_time = None
         self.size_locked = False
-        self.size_lock_time = None
+        self.is_size_locked = False  # Reset new flag
+        self.is_distance_valid = False
 
     def prev_shirt(self):
         self.shirt_index = (self.shirt_index - 1) % len(self.shirt_cache)
         self.smoother.reset()
         self.locked_size = None  # Reset locked size when changing shirt
+        self.locked_shirt_size = None
+        self.locked_pant_size = None
+        self.lock_start_time = None
         self.size_locked = False
-        self.size_lock_time = None
+        self.is_size_locked = False  # Reset new flag
+        self.is_distance_valid = False
     
     def _update_countdown(self):
         """Update countdown and transition to detection phase."""
@@ -349,7 +397,12 @@ class TryOnEngine:
         self.countdown_start_time = time.time()
         self.detection_ready = False
         self.locked_size = None
+        self.locked_shirt_size = None
+        self.locked_pant_size = None
+        self.lock_start_time = None
         self.size_locked = False
+        self.is_size_locked = False  # Reset size locked flag
+        self.is_distance_valid = False  # Reset distance flag
         self.display_state = "STANDBY"
         self.smoother.reset()
         print("[INFO] Reset for next user. 5-second countdown starting...")
@@ -408,13 +461,15 @@ class TryOnEngine:
                 # Person is turned/angled - return current size instead of changing
                 return self.size_stabilizer.stable_size
             
-            if ratio < 0.65:
+            if ratio < 0.60:
                 return "S"
-            elif ratio < RATIO_THRESHOLD:
+            elif ratio < 0.70:
                 return "M"
-            elif ratio < 0.80:
+            elif ratio < 0.78:
                 return "L"
             return "XL"
+        
+        
 
     def process_frame(self, frame_bgr):
         """Process frame and overlay clothing."""
@@ -428,16 +483,28 @@ class TryOnEngine:
         person_mask = self._build_person_mask(seg_res.segmentation_mask)
         pose_res = self.pose.process(rgb)
 
-        # Reset distance warning each frame
+        # Frame state initialization
         self.distance_warning = ""
-
-        # Only detect during detection phase or after detection is done
-        user_size = self.locked_size if self.locked_size else "M"
+        self.distance_warning_color = "white"
+        self.is_distance_valid = False
+        
+        # Display sizes: show locked sizes if available, otherwise "--"
+        user_size_shirt = self.locked_shirt_size if self.is_size_locked else "--"
+        user_size_pant = self.locked_pant_size if self.is_size_locked else "--"
+        
         shirt_rgba = self.shirt_cache[self.shirt_index].copy()
         filename = self.get_current_shirt_name().lower()
         is_pants = "pant" in filename or "short" in filename
 
-        # ALWAYS check distance when pose is detected (even during countdown)
+        # ===== AUTO-RESET CHECK (30 minutes after locking) =====
+        if self.is_size_locked and self.lock_start_time is not None:
+            elapsed_time = time.time() - self.lock_start_time
+            if elapsed_time > self.auto_reset_timeout:
+                print("[WARN] 30 minutes passed. Auto-resetting for next user...")
+                self.reset_for_next_user()
+                countdown = self._update_countdown()
+
+        # Process pose landmarks
         if pose_res.pose_landmarks:
             h, w = frame.shape[:2]
             lm = pose_res.pose_landmarks.landmark
@@ -453,83 +520,111 @@ class TryOnEngine:
 
             shoulder_w = int(math.hypot(lsx - rsx, lsy - rsy))
             
-            # ALWAYS validate distance (even during countdown)
-            is_right_distance, distance_msg = self._validate_distance(shoulder_w)
-            self.distance_warning = distance_msg
-            print(f"[DIST] shoulder={shoulder_w}px, valid={is_right_distance}, msg='{distance_msg}', state={self.display_state}, ready={self.detection_ready}", flush=True)
+            # ===== DISTANCE VALIDATION (ALWAYS CHECK) =====
+            is_dist_valid, distance_msg, msg_color = self._validate_distance(shoulder_w)
+            self.is_distance_valid = is_dist_valid
+            
+            # Show warning ONLY if size is not locked yet
+            if not self.is_size_locked:
+                self.distance_warning = distance_msg
+                self.distance_warning_color = msg_color
+            else:
+                # After locking, no warnings
+                self.distance_warning = ""
+                self.distance_warning_color = "white"
+            
+            print(f"[DIST] shoulder={shoulder_w}px | valid={is_dist_valid} | size_locked={self.is_size_locked}", flush=True)
 
-            # Now do clothing overlay ONLY during detection or after locked
-            if self.detection_ready or self.size_locked:
+            # ===== DETECT BOTH SHIRT AND PANT SIZE AT 6 FEET =====
+            # Only detect if:
+            # 1. Countdown is over (detection_ready = True)
+            # 2. Distance is exactly 6 feet (is_distance_valid = True)
+            # 3. Size hasn't been locked yet (is_size_locked = False)
+            
+            if self.detection_ready and is_dist_valid and not self.is_size_locked:
+                # Get measurements for both shirt and pants
+                lk, rk = lm[mp.PoseLandmark.LEFT_KNEE], lm[mp.PoseLandmark.RIGHT_KNEE]
+                lky, rky = int(lk.y * h), int(rk.y * h)
+                
+                hip_w = int(math.hypot(lhx - rhx, lhy - rhy))
+                leg_h = int(((lky + rky) // 2) - ((lhy + rhy) // 2))
+                torso_h = int(((lhy + rhy) // 2) - ((lsy + rsy) // 2))
+                
+                # Detect SHIRT size
+                if shoulder_w > 10 and torso_h > 10:
+                    shirt_predicted = self._predict_size(shoulder_w, torso_h, is_pants=False)
+                    self.locked_shirt_size = shirt_predicted
+                    print(f"[OK] SHIRT SIZE DETECTED: {shirt_predicted} (shoulder_w={shoulder_w}, torso_h={torso_h})", flush=True)
+                
+                # Detect PANT size
+                if hip_w > 10 and leg_h > 10:
+                    pant_predicted = self._predict_size(hip_w, leg_h, is_pants=True)
+                    self.locked_pant_size = pant_predicted
+                    print(f"[OK] PANT SIZE DETECTED: {pant_predicted} (hip_w={hip_w}, leg_h={leg_h})", flush=True)
+                
+                # Lock both sizes together
+                if self.locked_shirt_size is not None and self.locked_pant_size is not None:
+                    self.is_size_locked = True
+                    self.size_locked = True
+                    self.lock_start_time = time.time()
+                    self.display_state = "READY"
+                    user_size_shirt = self.locked_shirt_size
+                    user_size_pant = self.locked_pant_size
+                    print(f"[OK] BOTH SIZES LOCKED! Shirt: {self.locked_shirt_size}, Pant: {self.locked_pant_size}", flush=True)
+            
+            # ===== OVERLAY CLOTHING (ONLY IF SIZE IS LOCKED AND DISTANCE VALID) =====
+            # Render clothing only when size is locked AND user is at exactly 6 feet
+            if self.is_size_locked and self.is_distance_valid:
                 if is_pants:
-                    # Pants: align to hips
                     lk, rk = lm[mp.PoseLandmark.LEFT_KNEE], lm[mp.PoseLandmark.RIGHT_KNEE]
                     lky, rky = int(lk.y * h), int(rk.y * h)
-
                     hip_w = int(math.hypot(lhx - rhx, lhy - rhy))
                     leg_h = int(((lky + rky) // 2) - ((lhy + rhy) // 2))
 
-                    if hip_w > 10 and leg_h > 10:  # Reduced from 30 for better sensitivity
-                        # Lock size ONLY if at correct distance
-                        if not self.size_locked and self.detection_ready and is_right_distance:
-                            predicted = self._predict_size(hip_w, leg_h, is_pants=True)
-                            self.locked_size = predicted
-                            self.size_locked = True
-                            self.display_state = "READY"
-                            user_size = self.locked_size
-                            print(f"[OK] Size detected for pants: {self.locked_size} (hip_w={hip_w}, leg_h={leg_h})")
-                        
-                        if self.size_locked:  # Show pants if size is locked
-                            preset = SIZE_PRESETS.get(user_size, SIZE_PRESETS["M"])
-                            target_w = int(hip_w * preset["width_scale"])
-                            target_h = int(leg_h * preset["height_scale"])
-                            resized = cv2.resize(shirt_rgba, (target_w, target_h), interpolation=cv2.INTER_AREA)
+                    if hip_w > 10 and leg_h > 10:
+                        preset = SIZE_PRESETS.get(self.locked_pant_size, SIZE_PRESETS["M"])
+                        target_w = int(hip_w * preset["width_scale"])
+                        target_h = int(leg_h * preset["height_scale"])
+                        resized = cv2.resize(shirt_rgba, (target_w, target_h), interpolation=cv2.INTER_AREA)
 
-                            cx, cy = (lhx + rhx) // 2, (lhy + rhy) // 2
-                            x = cx - target_w // 2
-                            y = cy - int(target_h * preset["y_lift"])
+                        cx, cy = (lhx + rhx) // 2, (lhy + rhy) // 2
+                        x = cx - target_w // 2
+                        y = cy - int(target_h * preset["y_lift"])
 
-                            resized = adapt_lighting(resized, frame, x, y, LIGHT_ADAPT_STRENGTH)
-                            resized = apply_body_shading(resized, frame, x, y, SHADOW_STRENGTH, HIGHLIGHT_STRENGTH)
-                            frame = blend_overlay(frame, resized, x, y)
+                        resized = adapt_lighting(resized, frame, x, y, LIGHT_ADAPT_STRENGTH)
+                        resized = apply_body_shading(resized, frame, x, y, SHADOW_STRENGTH, HIGHLIGHT_STRENGTH)
+                        frame = blend_overlay(frame, resized, x, y)
                 else:
-                    # Shirt: align to shoulders
                     torso_h = int(((lhy + rhy) // 2) - ((lsy + rsy) // 2))
 
-                    if shoulder_w > 10 and torso_h > 10:  # Reduced from 30 for better sensitivity
-                        # Lock size ONLY if at correct distance
-                        if not self.size_locked and self.detection_ready and is_right_distance:
-                            predicted = self._predict_size(shoulder_w, torso_h, is_pants=False)
-                            self.locked_size = predicted
-                            self.size_locked = True
-                            self.display_state = "READY"
-                            user_size = self.locked_size
-                            print(f"[OK] Size detected for shirt: {self.locked_size} (shoulder_w={shoulder_w}, torso_h={torso_h})")
-                        
-                        if self.size_locked:  # Show shirt if size is locked
-                            preset = SIZE_PRESETS.get(user_size, SIZE_PRESETS["M"])
-                            target_w = int(shoulder_w * preset["width_scale"])
-                            target_h = int(torso_h * preset["height_scale"])
-                            resized = cv2.resize(shirt_rgba, (target_w, target_h), interpolation=cv2.INTER_AREA)
+                    if shoulder_w > 10 and torso_h > 10:
+                        preset = SIZE_PRESETS.get(self.locked_shirt_size, SIZE_PRESETS["M"])
+                        target_w = int(shoulder_w * preset["width_scale"])
+                        target_h = int(torso_h * preset["height_scale"])
+                        resized = cv2.resize(shirt_rgba, (target_w, target_h), interpolation=cv2.INTER_AREA)
 
-                            cx, cy = (lsx + rsx) // 2, (lsy + rsy) // 2
-                            x = cx - target_w // 2
-                            y = cy - int(target_h * preset["y_lift"])
+                        cx, cy = (lsx + rsx) // 2, (lsy + rsy) // 2
+                        x = cx - target_w // 2
+                        y = cy - int(target_h * preset["y_lift"])
 
-                            # Neck cutout
-                            neck_radius = shoulder_w * 0.15
-                            neck_y = cy - int(torso_h * 0.1)
-                            resized = create_neck_cutout(resized, cx, neck_y, neck_radius, x, y)
+                        # Neck cutout
+                        neck_radius = shoulder_w * 0.15
+                        neck_y = cy - int(torso_h * 0.1)
+                        resized = create_neck_cutout(resized, cx, neck_y, neck_radius, x, y)
 
-                            resized = adapt_lighting(resized, frame, x, y, LIGHT_ADAPT_STRENGTH)
-                            resized = apply_body_shading(resized, frame, x, y, SHADOW_STRENGTH, HIGHLIGHT_STRENGTH)
-                            frame = blend_overlay(frame, resized, x, y)
+                        resized = adapt_lighting(resized, frame, x, y, LIGHT_ADAPT_STRENGTH)
+                        resized = apply_body_shading(resized, frame, x, y, SHADOW_STRENGTH, HIGHLIGHT_STRENGTH)
+                        frame = blend_overlay(frame, resized, x, y)
 
         return frame, {
-            "user_size": user_size,
+            "user_size_shirt": user_size_shirt,
+            "user_size_pant": user_size_pant,
             "item_type": "Pant/Short" if is_pants else "Shirt",
             "filename": self.get_current_shirt_name(),
             "countdown": countdown,
             "state": self.display_state,
-            "size_locked": self.size_locked,
+            "size_locked": self.is_size_locked,
+            "distance_valid": self.is_distance_valid,
             "distance_warning": self.distance_warning,
+            "distance_warning_color": self.distance_warning_color,
         }
