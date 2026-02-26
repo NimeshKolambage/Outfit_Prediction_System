@@ -441,34 +441,33 @@ class TryOnEngine:
         ratio = width / (height + 1e-6)
         
         if is_pants:
-            # Pants have much lower ratio (hip is narrow, legs are long)
-            # Valid range for front-facing: 0.15-0.50
-            if ratio < 0.15 or ratio > 0.50:
-                # Person is turned/angled - return current size instead of changing
-                return self.size_stabilizer.stable_size
-            
-            if ratio < 0.25:
-                return "S"
-            elif ratio < 0.35:
-                return "M"
-            elif ratio < 0.42:
-                return "L"
-            return "XL"
+           # Pants ratio (Ina / Kalisame diga wage)
+           # Lankawe ayage ina (waist) poddak adu nisa values chuttak pahalata gaththa.
+           if ratio < 0.15 or ratio > 0.50:
+               return self.size_stabilizer.stable_size
+           
+           # Ranges Adjusted for SL
+           if ratio < 0.20:        # Kalin 0.22 (S eka poddak narrow kara)
+               return "S"
+           elif ratio < 0.27:      # Kalin 0.30 (M eka 0.27n iwara kara)
+               return "M"
+           elif ratio < 0.35:      # Kalin 0.38 (L eka 0.35n iwara kara)
+               return "L"
+           return "XL"
+           
         else:
-            # Shirts: use shoulder width / torso height ratio
-            # Valid range for front-facing: 0.55-0.85
+            # Shirts: Shoulder width / Torso height
             if ratio < 0.55 or ratio > 0.85:
-                # Person is turned/angled - return current size instead of changing
                 return self.size_stabilizer.stable_size
             
-            if ratio < 0.60:
+            # Lankawe ayage shoulders poddak keti nisa L ekata wada M range eka adu kala
+            if ratio < 0.60:        # S size
                 return "S"
-            elif ratio < 0.70:
+            elif ratio < 0.67:      # M size (0.67n iwara wenawa, ethakota 0.68-0.70 aya L wenawa)
                 return "M"
-            elif ratio < 0.78:
+            elif ratio < 0.75:      # L size
                 return "L"
             return "XL"
-        
         
 
     def process_frame(self, frame_bgr):
@@ -554,13 +553,15 @@ class TryOnEngine:
                 if shoulder_w > 10 and torso_h > 10:
                     shirt_predicted = self._predict_size(shoulder_w, torso_h, is_pants=False)
                     self.locked_shirt_size = shirt_predicted
-                    print(f"[OK] SHIRT SIZE DETECTED: {shirt_predicted} (shoulder_w={shoulder_w}, torso_h={torso_h})", flush=True)
+                    ratio_shirt = shoulder_w / torso_h
+                    print(f"[OK] SHIRT SIZE DETECTED: {shirt_predicted} (shoulder_w={shoulder_w}, torso_h={torso_h}, ratio={ratio_shirt:.3f})", flush=True)
                 
                 # Detect PANT size
                 if hip_w > 10 and leg_h > 10:
                     pant_predicted = self._predict_size(hip_w, leg_h, is_pants=True)
                     self.locked_pant_size = pant_predicted
-                    print(f"[OK] PANT SIZE DETECTED: {pant_predicted} (hip_w={hip_w}, leg_h={leg_h})", flush=True)
+                    ratio_pant = hip_w / leg_h
+                    print(f"[OK] PANT SIZE DETECTED: {pant_predicted} (hip_w={hip_w}, leg_h={leg_h}, ratio={ratio_pant:.3f})", flush=True)
                 
                 # Lock both sizes together
                 if self.locked_shirt_size is not None and self.locked_pant_size is not None:
