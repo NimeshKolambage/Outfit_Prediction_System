@@ -247,11 +247,13 @@ class TryOnEngine:
         # Calibration: at 6 feet, shoulder width ≈ 145-155 px on typical webcam
         # Approximate conversion: distance_ft ≈ (shoulder_width_inches * focal_length) / shoulder_px
         # For standard setup: ~6ft → ~150px
-        target_px = 100  # pixels at 6 feet
-        px_tolerance = 15  # ±15px = roughly ±0.3 feet
+       # Calibration: at 6 feet, shoulder width ≈ 145-155 px on typical webcam
+        # For standard setup: ~6ft → ~150px
+        target_px = 150          # ✅ was 100 (wrong for most webcams)
+        px_tolerance = 20        # ✅ was 15 (give a bit more room)
         
-        min_px = target_px - px_tolerance  # 135px ≈ 5.8 ft
-        max_px = target_px + px_tolerance  # 165px ≈ 6.2 ft
+        min_px = target_px - px_tolerance
+        max_px = target_px + px_tolerance
         
         if shoulder_w_px < min_px:
             # Too far
@@ -271,7 +273,8 @@ class TryOnEngine:
 
         self.pose = mp.Pose(static_image_mode=False, model_complexity=1)
         self.seg = mp.SelfieSegmentation(model_selection=1)
-        self.size_stabilizer = SizeStabilizer(initial_size="M", need_frames=STABLE_FRAMES)
+        self.shirt_stabilizer = SizeStabilizer(initial_size="M", need_frames=STABLE_FRAMES)
+        self.pant_stabilizer  = SizeStabilizer(initial_size="M", need_frames=STABLE_FRAMES)
         self.smoother = LandmarkSmoother(alpha=0.5)
         
         # Countdown + One-time detection system
@@ -443,8 +446,7 @@ class TryOnEngine:
         if is_pants:
            # Pants ratio (Ina / Kalisame diga wage)
            # Lankawe ayage ina (waist) poddak adu nisa values chuttak pahalata gaththa.
-           if ratio < 0.15 or ratio > 0.50:
-               return self.size_stabilizer.stable_size
+           ratio = float(np.clip(ratio, 0.15, 0.50))
            
            # Ranges Adjusted for SL
            if ratio < 0.20:        # Kalin 0.22 (S eka poddak narrow kara)
@@ -457,8 +459,7 @@ class TryOnEngine:
            
         else:
             # Shirts: Shoulder width / Torso height
-            if ratio < 0.55 or ratio > 0.85:
-                return self.size_stabilizer.stable_size
+            ratio = float(np.clip(ratio, 0.55, 0.85))
             
             # Lankawe ayage shoulders poddak keti nisa L ekata wada M range eka adu kala
             if ratio < 0.60:        # S size
