@@ -341,23 +341,42 @@ class TryOnEngine:
         person = cv2.morphologyEx(person, cv2.MORPH_OPEN, kernel, iterations=1)
         return cv2.GaussianBlur(person.astype(np.float32) / 255.0, (0, 0), 5)
 
-    def _predict_size(self, width, height):
-        """Predict size based on body proportions with angle detection."""
+    def _predict_size(self, width, height, is_pants=False):
+        """Predict size based on body proportions with angle detection.
+        
+        For shirts: uses shoulder width / torso height (ratio: 0.55-0.85)
+        For pants: uses hip width / leg height (ratio: 0.20-0.45, different range)
+        """
         ratio = width / (height + 1e-6)
         
-        # Check body pose angle - avoid detecting when not facing forward
-        # Ratio should be between 0.55-0.85 for front-facing person
-        if ratio < 0.55 or ratio > 0.85:
-            # Person is turned/angled - return current size instead of changing
-            return self.size_stabilizer.stable_size
-        
-        if ratio < 0.65:
-            return "S"
-        elif ratio < RATIO_THRESHOLD:
-            return "M"
-        elif ratio < 0.80:
-            return "L"
-        return "XL"
+        if is_pants:
+            # Pants have much lower ratio (hip is narrow, legs are long)
+            # Valid range for front-facing: 0.15-0.50
+            if ratio < 0.15 or ratio > 0.50:
+                # Person is turned/angled - return current size instead of changing
+                return self.size_stabilizer.stable_size
+            
+            if ratio < 0.25:
+                return "S"
+            elif ratio < 0.35:
+                return "M"
+            elif ratio < 0.42:
+                return "L"
+            return "XL"
+        else:
+            # Shirts: use shoulder width / torso height ratio
+            # Valid range for front-facing: 0.55-0.85
+            if ratio < 0.55 or ratio > 0.85:
+                # Person is turned/angled - return current size instead of changing
+                return self.size_stabilizer.stable_size
+            
+            if ratio < 0.65:
+                return "S"
+            elif ratio < RATIO_THRESHOLD:
+                return "M"
+            elif ratio < 0.80:
+                return "L"
+            return "XL"
 
     def process_frame(self, frame_bgr):
         """Process frame and overlay clothing."""
@@ -398,7 +417,7 @@ class TryOnEngine:
                 if hip_w > 30 and leg_h > 30:
                     # Lock size on first detection
                     if not self.size_locked:
-                        predicted = self._predict_size(hip_w, leg_h)
+                        predicted = self._predict_size(hip_w, leg_h, is_pants=True)
                         self.locked_size = predicted
                         self.size_locked = True
                         user_size = self.locked_size
@@ -424,7 +443,7 @@ class TryOnEngine:
                 if shoulder_w > 30 and torso_h > 30:
                     # Lock size on first detection
                     if not self.size_locked:
-                        predicted = self._predict_size(shoulder_w, torso_h)
+                        predicted = self._predict_size(shoulder_w, torso_h, is_pants=False)
                         self.locked_size = predicted
                         self.size_locked = True
                         user_size = self.locked_size
