@@ -23,7 +23,8 @@ HIGHLIGHT_STRENGTH = 0.15    # Body highlight intensity
 
 # Size prediction
 RATIO_THRESHOLD = 0.72
-STABLE_FRAMES = 10
+STABLE_FRAMES = 25  # Increased stability buffer (was 10)
+RATIO_CHANGE_THRESHOLD = 0.08  # Minimum ratio change to trigger size update (new)
 
 # Scale presets per size
 SIZE_PRESETS = {
@@ -174,18 +175,33 @@ def create_neck_cutout(shirt_rgba, neck_x, neck_y, neck_radius, shirt_x, shirt_y
 
 class SizeStabilizer:
     """Stabilize size predictions using voting over recent frames."""
-    def __init__(self, initial_size="M", need_frames=10):
+    def __init__(self, initial_size="M", need_frames=25):
         self.stable_size = initial_size
         self.need_frames = need_frames
         self.size_history = []
 
     def update(self, current_size):
-        self.size_history.append(current_size)
+        # Only add to history if it differs from current stable size
+        # This prevents rapid oscillation between sizes
+        if current_size != self.stable_size:
+            self.size_history.append(current_size)
+        else:
+            # Reinforce current size
+            self.size_history.append(self.stable_size)
+            
         if len(self.size_history) > self.need_frames:
             self.size_history.pop(0)
 
-        if len(self.size_history) >= self.need_frames // 2:
-            self.stable_size = Counter(self.size_history).most_common(1)[0][0]
+        # Required: 70% of recent frames must agree to change size
+        if len(self.size_history) >= self.need_frames:
+            most_common = Counter(self.size_history).most_common(1)
+            if len(self.size_history) > 0:
+                top_count = most_common[0][1] if most_common else 0
+                confidence = top_count / len(self.size_history)
+                # Only change if we have high confidence (>70%)
+                if confidence > 0.7:
+                    self.stable_size = most_common[0][0]
+        
         return self.stable_size
 
 
@@ -227,6 +243,10 @@ class TryOnEngine:
         self.seg = mp.SelfieSegmentation(model_selection=1)
         self.size_stabilizer = SizeStabilizer(initial_size="M", need_frames=STABLE_FRAMES)
         self.smoother = LandmarkSmoother(alpha=0.5)
+        
+        # Lock size after initial detection
+        self.locked_size = None  # Will be set on first detection
+        self.size_locked = False  # Flag to track if size is locked
 
         self._load_clothing()
 
@@ -283,10 +303,14 @@ class TryOnEngine:
             raise ValueError("Unsupported format")
 
         return img
+        self.locked_size = None  # Reset locked size when changing shirt
+        self.size_locked = False
 
-    def next_shirt(self):
-        self.shirt_index = (self.shirt_index + 1) % len(self.shirt_cache)
+    def prev_shirt(self):
+        self.shirt_index = (self.shirt_index - 1) % len(self.shirt_cache)
         self.smoother.reset()
+        self.locked_size = None  # Reset locked size when changing shirt
+        self.size_locked = False
 
     def prev_shirt(self):
         self.shirt_index = (self.shirt_index - 1) % len(self.shirt_cache)
@@ -318,8 +342,15 @@ class TryOnEngine:
         return cv2.GaussianBlur(person.astype(np.float32) / 255.0, (0, 0), 5)
 
     def _predict_size(self, width, height):
-        """Predict size based on body proportions."""
+        """Predict size based on body proportions with angle detection."""
         ratio = width / (height + 1e-6)
+        
+        # Check body pose angle - avoid detecting when not facing forward
+        # Ratio should be between 0.55-0.85 for front-facing person
+        if ratio < 0.55 or ratio > 0.85:
+            # Person is turned/angled - return current size instead of changing
+            return self.size_stabilizer.stable_size
+        
         if ratio < 0.65:
             return "S"
         elif ratio < RATIO_THRESHOLD:
@@ -337,7 +368,8 @@ class TryOnEngine:
         person_mask = self._build_person_mask(seg_res.segmentation_mask)
         pose_res = self.pose.process(rgb)
 
-        user_size = self.size_stabilizer.stable_size
+        # Use locked size if available, otherwise use stabilizer
+        user_size = self.locked_size if self.locked_size else self.size_stabilizer.stable_size
         shirt_rgba = self.shirt_cache[self.shirt_index].copy()
         filename = self.get_current_shirt_name().lower()
         is_pants = "pant" in filename or "short" in filename
@@ -364,7 +396,13 @@ class TryOnEngine:
                 leg_h = int(((lky + rky) // 2) - ((lhy + rhy) // 2))
 
                 if hip_w > 30 and leg_h > 30:
-                    user_size = self.size_stabilizer.update(self._predict_size(hip_w, leg_h))
+                    # Lock size on first detection
+                    if not self.size_locked:
+                        predicted = self._predict_size(hip_w, leg_h)
+                        self.locked_size = predicted
+                        self.size_locked = True
+                        user_size = self.locked_size
+                    
                     preset = SIZE_PRESETS.get(user_size, SIZE_PRESETS["M"])
 
                     target_w = int(hip_w * preset["width_scale"])
@@ -384,7 +422,13 @@ class TryOnEngine:
                 torso_h = int(((lhy + rhy) // 2) - ((lsy + rsy) // 2))
 
                 if shoulder_w > 30 and torso_h > 30:
-                    user_size = self.size_stabilizer.update(self._predict_size(shoulder_w, torso_h))
+                    # Lock size on first detection
+                    if not self.size_locked:
+                        predicted = self._predict_size(shoulder_w, torso_h)
+                        self.locked_size = predicted
+                        self.size_locked = True
+                        user_size = self.locked_size
+                    
                     preset = SIZE_PRESETS.get(user_size, SIZE_PRESETS["M"])
 
                     target_w = int(shoulder_w * preset["width_scale"])
