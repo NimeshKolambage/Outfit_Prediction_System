@@ -1,21 +1,4 @@
-"""
-Body Measurements Module using MediaPipe Pose Landmarks
-Detects shoulder width, chest size, and arm length from camera feed.
-Works alongside gender_detector.py and server.py.
-All processing runs on Flask-served frames — no separate OpenCV windows.
 
-Landmark indices used (MediaPipe Pose):
-  11 LEFT_SHOULDER   12 RIGHT_SHOULDER
-  13 LEFT_ELBOW      14 RIGHT_ELBOW
-  15 LEFT_WRIST      16 RIGHT_WRIST
-  23 LEFT_HIP        24 RIGHT_HIP
-
-Calibration strategy:
-  Instead of a fixed PIXEL_TO_CM constant (which depends on distance to camera),
-  we use the shoulder-to-hip torso height as a biological reference.
-  Average torso height (shoulder→hip) ≈ 42 cm (male) / 39 cm (female).
-  pixel_to_cm = reference_cm / torso_px  — recalculated every frame.
-"""
 
 import cv2
 import numpy as np
