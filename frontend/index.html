@@ -572,6 +572,85 @@
             font-size: 28px;
         }
 
+        /* Size Info Badge */
+        .size-badge {
+            position: absolute;
+            bottom: 24px;
+            right: 24px;
+            background: rgba(0, 0, 0, 0.85);
+            padding: 14px 20px;
+            border-radius: 12px;
+            z-index: 10;
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            min-width: 200px;
+            text-align: right;
+        }
+
+        .size-badge .label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+
+        .size-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+
+        .size-val {
+            font-size: 20px;
+            font-weight: 700;
+            color: #34d399;
+        }
+
+        .size-val.pending {
+            color: var(--text-secondary);
+        }
+
+        .state-indicator {
+            margin-top: 8px;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 4px 10px;
+            border-radius: 6px;
+            background: rgba(37, 99, 235, 0.2);
+            color: #60a5fa;
+            text-align: center;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .state-indicator.locked {
+            background: rgba(52, 211, 153, 0.2);
+            color: #34d399;
+        }
+
+        .state-indicator.warning {
+            background: rgba(239, 68, 68, 0.2);
+            color: #f87171;
+        }
+
+        .distance-warning {
+            margin-top: 6px;
+            font-size: 11px;
+            color: #f87171;
+            text-align: center;
+        }
+
+        .distance-warning.ok {
+            color: #34d399;
+        }
+
         #video-feed {
             width: 100%;
             display: block;
@@ -1007,6 +1086,21 @@
                         <span id="gender-text">Detecting...</span>
                     </div>
                 </div>
+
+                <!-- Size Info Badge -->
+                <div class="size-badge" id="size-badge">
+                    <div class="label">Predicted Size</div>
+                    <div class="size-row">
+                        <span>👕 Shirt</span>
+                        <span class="size-val pending" id="size-shirt">--</span>
+                    </div>
+                    <div class="size-row">
+                        <span>👖 Pant</span>
+                        <span class="size-val pending" id="size-pant">--</span>
+                    </div>
+                    <div class="state-indicator" id="state-indicator">STANDBY</div>
+                    <div class="distance-warning" id="distance-warning"></div>
+                </div>
             </div>
         </div>
 
@@ -1041,6 +1135,14 @@
                     <path d="M12 3v18M3 12h18" />
                 </svg>
                 Change Clothing
+            </button>
+            <button class="btn-control" onclick="resetUser()" title="Reset for next user (new 5s countdown)">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                    <path d="M3 3v5h5" />
+                </svg>
+                Next User
             </button>
             <button class="btn-control" onclick="showLanding()">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -1226,13 +1328,43 @@
             clothingBadge.textContent = '';
         }
 
+        const sizeShirtEl = document.getElementById('size-shirt');
+        const sizePantEl = document.getElementById('size-pant');
+        const stateIndicatorEl = document.getElementById('state-indicator');
+        const distanceWarningEl = document.getElementById('distance-warning');
+
         async function updateTryOnStatus() {
             if (!isStreaming) return;
             try {
                 const response = await fetch(`${SERVER_URL}/api/tryon/status`);
                 const data = await response.json();
-                const label = `${data.item_type}: ${data.filename} | Size: ${data.user_size}`;
-                clothingBadge.textContent = label;
+
+                // Update clothing badge
+                const shirtSize = data.user_size_shirt || '--';
+                const pantSize = data.user_size_pant || '--';
+                clothingBadge.textContent = `${data.item_type}: ${data.filename}`;
+
+                // Update size display
+                sizeShirtEl.textContent = shirtSize;
+                sizePantEl.textContent = pantSize;
+                sizeShirtEl.className = 'size-val' + (shirtSize === '--' ? ' pending' : '');
+                sizePantEl.className = 'size-val' + (pantSize === '--' ? ' pending' : '');
+
+                // Update state indicator
+                const state = data.state || 'STANDBY';
+                const countdown = data.countdown || 0;
+                let stateText = state;
+                if (state === 'COUNTDOWN' && countdown > 0) stateText = `COUNTDOWN: ${countdown}s`;
+                else if (state === 'DETECTING') stateText = '🎯 DETECTING...';
+                else if (data.size_locked) stateText = '✓ SIZE LOCKED';
+                stateIndicatorEl.textContent = stateText;
+                stateIndicatorEl.className = 'state-indicator' +
+                    (data.size_locked ? ' locked' : (state === 'COUNTDOWN' || state === 'DETECTING' ? '' : ''));
+
+                // Update distance warning
+                const warn = data.distance_warning || '';
+                distanceWarningEl.textContent = warn;
+                distanceWarningEl.className = 'distance-warning' + (data.distance_valid ? ' ok' : '');
             } catch (e) {
                 // Ignore network errors while streaming
             }
@@ -1260,6 +1392,22 @@
                 updateTryOnStatus();
             } catch (e) {
                 alert('Failed to reload clothing. Is the server running?');
+            }
+        }
+
+        async function resetUser() {
+            try {
+                await fetch(`${SERVER_URL}/api/tryon/reset`);
+                // Reset local size display immediately
+                sizeShirtEl.textContent = '--';
+                sizePantEl.textContent = '--';
+                sizeShirtEl.className = 'size-val pending';
+                sizePantEl.className = 'size-val pending';
+                stateIndicatorEl.textContent = 'COUNTDOWN';
+                stateIndicatorEl.className = 'state-indicator';
+                distanceWarningEl.textContent = '';
+            } catch (e) {
+                alert('Failed to reset. Is the server running?');
             }
         }
 

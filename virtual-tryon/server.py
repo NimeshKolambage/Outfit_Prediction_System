@@ -30,8 +30,14 @@ is_running = False
 tryon_engine = None
 current_tryon = {
     "filename": "",
-    "user_size": "M",
+    "user_size_shirt": "--",
+    "user_size_pant": "--",
     "item_type": "Shirt",
+    "size_locked": False,
+    "distance_valid": False,
+    "distance_warning": "",
+    "countdown": 0,
+    "state": "STANDBY",
 }
 
 # Configuration
@@ -102,7 +108,7 @@ def generate_frames():
             cv2.putText(frame, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv2.putText(
                 frame,
-                f"Predicted Size: {info['user_size']}",
+                f"Shirt: {info['user_size_shirt']}  |  Pant: {info['user_size_pant']}",
                 (10, 60),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,
@@ -265,8 +271,14 @@ def get_tryon_status():
     """API endpoint to get current try-on state"""
     return jsonify({
         'filename': current_tryon.get('filename', ''),
-        'user_size': current_tryon.get('user_size', 'M'),
-        'item_type': current_tryon.get('item_type', 'Shirt')
+        'user_size_shirt': current_tryon.get('user_size_shirt', '--'),
+        'user_size_pant': current_tryon.get('user_size_pant', '--'),
+        'item_type': current_tryon.get('item_type', 'Shirt'),
+        'size_locked': current_tryon.get('size_locked', False),
+        'distance_valid': current_tryon.get('distance_valid', False),
+        'distance_warning': current_tryon.get('distance_warning', ''),
+        'countdown': current_tryon.get('countdown', 0),
+        'state': current_tryon.get('state', 'STANDBY'),
     })
 
 
@@ -290,6 +302,27 @@ def tryon_reload():
     if tryon_engine is not None:
         count = tryon_engine.reload_clothing()
         return jsonify({'status': 'ok', 'count': count, 'items': tryon_engine.get_clothing_list()})
+    return jsonify({'status': 'error', 'message': 'Engine not loaded'})
+
+
+@app.route('/api/tryon/reset')
+def tryon_reset():
+    """Reset detection state for next user"""
+    global current_tryon
+    if tryon_engine is not None:
+        tryon_engine.reset_for_next_user()
+        current_tryon = {
+            "filename": current_tryon.get('filename', ''),
+            "user_size_shirt": "--",
+            "user_size_pant": "--",
+            "item_type": current_tryon.get('item_type', 'Shirt'),
+            "size_locked": False,
+            "distance_valid": False,
+            "distance_warning": "",
+            "countdown": 5,
+            "state": "STANDBY",
+        }
+        return jsonify({'status': 'ok', 'message': 'Reset for next user'})
     return jsonify({'status': 'error', 'message': 'Engine not loaded'})
 
 
