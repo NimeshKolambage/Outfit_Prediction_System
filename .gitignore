@@ -9,8 +9,8 @@ datasets/
 __pycache__/
 *.pyc
 
-# Local shirts/datasets (if they are large)
-virtual-tryon/shirts/
+
+
 
 # OS generated files
 .DS_Store
