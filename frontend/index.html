@@ -1325,6 +1325,11 @@
             <h2>Our Collection</h2>
             <p>Browse our latest collection and virtually try on your favorite items</p>
         </div>
+        <!-- Filter Label and Clear Button -->
+        <div id="filter-controls" style="display: none; max-width: 1200px; margin: 0 auto 30px; padding: 0 40px; display: flex; justify-content: space-between; align-items: center;">
+            <div id="filter-label" style="font-size: 0.95rem; color: var(--text-secondary); font-weight: 500;"></div>
+            <button id="clear-filter-btn" onclick="clearFilter()" style="padding: 8px 16px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.85rem; transition: all 0.2s ease;" onmouseover="this.style.background='rgba(239, 68, 68, 0.2)'" onmouseout="this.style.background='rgba(239, 68, 68, 0.1)'">Clear Filter</button>
+        </div>
         <div class="products-container" id="products-container">
             <div class="products-loading" id="products-loading">
                 <div class="spinner-small"></div>
@@ -1542,6 +1547,17 @@
                 sizeShirtEl.className = 'size-val' + (shirtSize === '--' ? ' pending' : '');
                 sizePantEl.className = 'size-val' + (pantSize === '--' ? ' pending' : '');
 
+                // Update product filter if products section is visible
+                const productsSection = document.getElementById('products-section');
+                if (productsSection && productsSection.classList.contains('active') && document.getElementById('products-grid')?.style.display === 'grid') {
+                    if (shirtSize !== '--' || pantSize !== '--') {
+                        applyPredictedFilter({
+                            shirtSize: shirtSize !== '--' ? shirtSize : null,
+                            pantsSize: pantSize !== '--' ? pantSize : null
+                        });
+                    }
+                }
+
                 // Update state indicator
                 const state = data.state || 'STANDBY';
                 const countdown = data.countdown || 0;
@@ -1655,8 +1671,9 @@
                     data.products.forEach(product => {
                         const card = document.createElement('div');
                         card.className = 'product-card';
+                        card.setAttribute('data-category', product.category.toLowerCase());
+                        card.setAttribute('data-size', product.size);
                         
-                        // Build image HTML
                         let imageHTML = '<div style="font-size: 5rem;">👕</div>';
                         if (product.image_path) {
                             imageHTML = `<img src="${SERVER_URL}/api/image/${product.image_path}" alt="${product.name}" loading="lazy" onerror="this.style.display='none';">`;
@@ -1681,6 +1698,16 @@
                         productsGrid.appendChild(card);
                     });
                     productsGrid.style.display = 'grid';
+                    
+                    // Auto-apply filter if predicted sizes are available
+                    const shirtSize = document.getElementById('size-shirt')?.textContent;
+                    const pantsSize = document.getElementById('size-pant')?.textContent;
+                    if (shirtSize && shirtSize !== '--' || pantsSize && pantsSize !== '--') {
+                        applyPredictedFilter({
+                            shirtSize: (shirtSize && shirtSize !== '--') ? shirtSize : null,
+                            pantsSize: (pantsSize && pantsSize !== '--') ? pantsSize : null
+                        });
+                    }
                 } else {
                     productsEmpty.style.display = 'block';
                 }
@@ -1704,8 +1731,78 @@
 
         function selectProduct(productId) {
             closeProducts();
-            // Product selected - the try-on system can use this if needed
             console.log('Selected product:', productId);
+        }
+
+        // ============== PRODUCT FILTERING BY PREDICTED SIZES ==============
+        let currentPredictedSizes = null;
+
+        function applyPredictedFilter(prediction) {
+            currentPredictedSizes = {
+                shirt: prediction.shirtSize || null,
+                pants: prediction.pantsSize || null
+            };
+
+            const productsGrid = document.getElementById('products-grid');
+            const filterControls = document.getElementById('filter-controls');
+            const filterLabel = document.getElementById('filter-label');
+
+            if (!productsGrid) return;
+
+            const cards = productsGrid.querySelectorAll('[data-category]');
+            let visibleCount = 0;
+
+            cards.forEach(card => {
+                const category = card.getAttribute('data-category');
+                const size = card.getAttribute('data-size');
+                let shouldShow = true;
+
+                if (category === 'shirt' && currentPredictedSizes.shirt) {
+                    shouldShow = size === currentPredictedSizes.shirt;
+                } else if (category === 'pants' && currentPredictedSizes.pants) {
+                    shouldShow = size === currentPredictedSizes.pants;
+                }
+
+                card.style.display = shouldShow ? '' : 'none';
+                if (shouldShow) visibleCount++;
+            });
+
+            let labelText = 'Filtered: ';
+            let hasFilter = false;
+            if (currentPredictedSizes.shirt) {
+                labelText += `Shirt ${currentPredictedSizes.shirt}`;
+                hasFilter = true;
+            }
+            if (currentPredictedSizes.pants) {
+                if (hasFilter) labelText += ' | ';
+                labelText += `Pants ${currentPredictedSizes.pants}`;
+                hasFilter = true;
+            }
+
+            if (hasFilter) {
+                filterLabel.textContent = labelText;
+                filterControls.style.display = 'flex';
+            } else {
+                filterControls.style.display = 'none';
+            }
+
+            console.log(`[Filter] Applied - Visible: ${visibleCount}/${cards.length}`);
+        }
+
+        function clearFilter() {
+            currentPredictedSizes = null;
+            const productsGrid = document.getElementById('products-grid');
+            const filterControls = document.getElementById('filter-controls');
+
+            if (!productsGrid) return;
+
+            const cards = productsGrid.querySelectorAll('[data-category]');
+            cards.forEach(card => {
+                card.style.display = '';
+            });
+
+            filterControls.style.display = 'none';
+            console.log('[Filter] Cleared');
         }
     </script>
 </body>
