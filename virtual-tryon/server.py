@@ -11,6 +11,8 @@ import threading
 import time
 import sys
 import os
+import mysql.connector
+from mysql.connector import Error
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -20,6 +22,11 @@ from tryon_engine import TryOnEngine
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend access
+
+# Serve static files from frontend directory
+import os
+frontend_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'frontend')
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Disable caching during development
 
 # Global variables
 camera = None
@@ -167,7 +174,49 @@ def generate_frames():
 
 
 @app.route('/')
-def index():
+def serve_frontend():
+    """Serve the frontend HTML"""
+    try:
+        with open(os.path.join(frontend_path, 'index.html'), 'r', encoding='utf-8') as f:
+            return f.read()
+    except:
+        return render_template_string('''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Virtual Try-On Server</title>
+            <style>
+                body { 
+                    font-family: Arial, sans-serif; 
+                    background: #1a1a1a; 
+                    color: white;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    padding: 40px;
+                    text-align: center;
+                }
+            </style>
+        </head>
+        <body>
+            <h1>✓ Virtual Try-On Server Running</h1>
+            <p>Frontend not found. Please access from the correct URL or check frontend directory.</p>
+            <p>API Endpoints available:</p>
+            <ul style="text-align: left; display: inline-block;">
+                <li>/api/products - Get all products from database</li>
+                <li>/api/products/&lt;id&gt; - Get specific product</li>
+                <li>/api/products/category/&lt;category&gt; - Get products by category</li>
+                <li>/tryon_feed - Video streaming feed</li>
+                <li>/api/gender - Get current gender detection</li>
+                <li>/api/tryon/status - Get try-on status</li>
+            </ul>
+        </body>
+        </html>
+        ''')
+
+
+@app.route('/api/index')
+def fallback_index():
     """Simple test page"""
     return render_template_string('''
     <!DOCTYPE html>
@@ -332,6 +381,135 @@ def tryon_list():
     if tryon_engine is not None:
         return jsonify({'items': tryon_engine.get_clothing_list(), 'count': len(tryon_engine.shirt_cache)})
     return jsonify({'items': [], 'count': 0})
+
+
+# ======================== DATABASE FUNCTIONS ========================
+
+def get_db_connection():
+    """Create a MySQL database connection"""
+    try:
+        # Try with no password first
+        connection = mysql.connector.connect(
+            host='localhost',
+            user='root',
+            password='',  # No password
+            database='outfit_prediction'
+        )
+        print("[OK] Database connected successfully")
+        return connection
+    except Error as err:
+        # Try with other possible configurations
+        try:
+            connection = mysql.connector.connect(
+                host='127.0.0.1',
+                user='root',
+                password='root',  # Try common password
+                database='outfit_prediction'
+            )
+            print("[OK] Database connected with password")
+            return connection
+        except Error:
+            print(f"[WARNING] Database connection failed: {err}")
+            print("[INFO] MySQL Products will not be available")
+            return None
+
+
+@app.route('/api/products', methods=['GET'])
+def get_products():
+    """Get all products from database"""
+    try:
+        connection = get_db_connection()
+        if connection is None:
+            return jsonify({'error': 'Database connection failed', 'products': []}), 500
+        
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM products ORDER BY id DESC")
+        products = cursor.fetchall()
+        cursor.close()
+        connection.close()
+        
+        return jsonify({'products': products, 'count': len(products)})
+    except Error as err:
+        print(f"[ERROR] Query failed: {err}")
+        return jsonify({'error': str(err), 'products': []}), 500
+
+
+@app.route('/api/products/<int:product_id>', methods=['GET'])
+def get_product(product_id):
+    """Get a specific product by ID"""
+    try:
+        connection = get_db_connection()
+        if connection is None:
+            return jsonify({'error': 'Database connection failed'}), 500
+        
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM products WHERE id = %s", (product_id,))
+        product = cursor.fetchone()
+        cursor.close()
+        connection.close()
+        
+        if product:
+            return jsonify({'product': product})
+        else:
+            return jsonify({'error': 'Product not found'}), 404
+    except Error as err:
+        print(f"[ERROR] Query failed: {err}")
+        return jsonify({'error': str(err)}), 500
+
+
+@app.route('/api/products/category/<category>', methods=['GET'])
+def get_products_by_category(category):
+    """Get products by category"""
+    try:
+        connection = get_db_connection()
+        if connection is None:
+            return jsonify({'error': 'Database connection failed', 'products': []}), 500
+        
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM products WHERE category = %s ORDER BY id DESC", (category,))
+        products = cursor.fetchall()
+        cursor.close()
+        connection.close()
+        
+        return jsonify({'products': products, 'count': len(products)})
+    except Error as err:
+        print(f"[ERROR] Query failed: {err}")
+        return jsonify({'error': str(err), 'products': []}), 500
+
+
+@app.route('/api/image/<path:filename>', methods=['GET'])
+def serve_image(filename):
+    """Serve image files from database paths"""
+    try:
+        # Construct the full path from the workspace root
+        # filename will be like 'virtual-tryon/shirts/shirt1.png'
+        workspace_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        image_path = os.path.join(workspace_root, filename)
+        
+        # Security: Prevent directory traversal attacks
+        image_path = os.path.abspath(image_path)
+        if not image_path.startswith(os.path.abspath(workspace_root)):
+            return jsonify({'error': 'Invalid path'}), 400
+        
+        # Check if file exists
+        if not os.path.exists(image_path):
+            print(f"[WARNING] Image not found: {image_path}")
+            return jsonify({'error': 'Image not found'}), 404
+        
+        # Determine the MIME type
+        mime_type = 'image/png'
+        if filename.lower().endswith('.jpg') or filename.lower().endswith('.jpeg'):
+            mime_type = 'image/jpeg'
+        elif filename.lower().endswith('.gif'):
+            mime_type = 'image/gif'
+        elif filename.lower().endswith('.webp'):
+            mime_type = 'image/webp'
+        
+        from flask import send_file
+        return send_file(image_path, mimetype=mime_type)
+    except Exception as err:
+        print(f"[ERROR] Failed to serve image: {err}")
+        return jsonify({'error': str(err)}), 500
 
 
 @app.route('/api/start')
