@@ -44,7 +44,9 @@ current_tryon = {
     "distance_valid": False,
     "distance_warning": "",
     "countdown": 0,
-    "state": "STANDBY",
+    "gender_countdown": 3,
+    "detected_gender": None,
+    "state": "GENDER_COUNTDOWN",
 }
 
 # Configuration
@@ -111,27 +113,36 @@ def generate_frames():
             frame, info = tryon_engine.process_frame(frame)
             current_tryon = info
 
-            label = f"{info['item_type']}: {info['filename']}"
-            cv2.putText(frame, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv2.putText(
-                frame,
-                f"Shirt: {info['user_size_shirt']}  |  Pant: {info['user_size_pant']}",
-                (10, 60),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 0),
-                2,
-            )
+            # Only show clothing info if not in gender phase or blocked
+            state = info.get('state', '')
+            if state not in ('GENDER_COUNTDOWN', 'FEMALE_BLOCKED'):
+                label = f"{info['item_type']}: {info['filename']}"
+                cv2.putText(frame, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                cv2.putText(
+                    frame,
+                    f"Shirt: {info['user_size_shirt']}  |  Pant: {info['user_size_pant']}",
+                    (10, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 255, 0),
+                    2,
+                )
+            
+            # Update current gender from engine's detection
+            if info.get('detected_gender'):
+                current_gender = info['detected_gender']
 
-        # Detect gender
+        # Detect gender (only show standalone overlay when engine is not handling it)
         if gender_detector is not None and gender_detector.model_loaded:
-            results = gender_detector.detect_gender(frame)
-            frame = gender_detector.draw_results(frame, results)
+            state = current_tryon.get('state', '')
+            if state not in ('GENDER_COUNTDOWN', 'FEMALE_BLOCKED'):
+                results = gender_detector.detect_gender(frame)
+                frame = gender_detector.draw_results(frame, results)
 
-            if results:
-                current_gender = results[0]['gender']
-            else:
-                current_gender = "No face detected"
+                if results:
+                    current_gender = results[0]['gender']
+                else:
+                    current_gender = "No face detected"
         else:
             current_gender = "Model not loaded"
             cv2.putText(
@@ -327,7 +338,9 @@ def get_tryon_status():
         'distance_valid': current_tryon.get('distance_valid', False),
         'distance_warning': current_tryon.get('distance_warning', ''),
         'countdown': current_tryon.get('countdown', 0),
-        'state': current_tryon.get('state', 'STANDBY'),
+        'gender_countdown': current_tryon.get('gender_countdown', 0),
+        'detected_gender': current_tryon.get('detected_gender', None),
+        'state': current_tryon.get('state', 'GENDER_COUNTDOWN'),
     })
 
 
@@ -369,7 +382,9 @@ def tryon_reset():
             "distance_valid": False,
             "distance_warning": "",
             "countdown": 5,
-            "state": "STANDBY",
+            "gender_countdown": 3,
+            "detected_gender": None,
+            "state": "GENDER_COUNTDOWN",
         }
         return jsonify({'status': 'ok', 'message': 'Reset for next user'})
     return jsonify({'status': 'error', 'message': 'Engine not loaded'})
@@ -544,6 +559,7 @@ def main():
 
     print("\n[INFO] Loading try-on engine...")
     tryon_engine = TryOnEngine(shirt_dir="shirts")
+    tryon_engine.set_gender_detector(gender_detector)
     
     if not gender_detector.model_loaded:
         print("\n[WARNING] Gender model not found!")

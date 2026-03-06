@@ -1,0 +1,332 @@
+================================================================================
+         OUTFIT PREDICTION SYSTEM - VIRTUAL TRY-ON
+         Project Technical Documentation
+================================================================================
+
+1. PROJECT OVERVIEW
+--------------------------------------------------------------------------------
+This system is a real-time Virtual Try-On platform that uses computer vision
+and machine learning to:
+  - Detect the user's gender from a webcam feed
+  - Predict the user's clothing size (Shirt & Pants) from body proportions
+  - Overlay virtual clothing items on the user's body in real-time
+  - Serve the experience via a Flask web server with a browser-based frontend
+
+The pipeline runs through three phases:
+  Phase 1: Gender Detection       (3-second countdown + face classification)
+  Phase 2: Size Prediction        (5-second countdown + distance calibration)
+  Phase 3: Virtual Clothing Overlay (real-time AR try-on)
+
+
+================================================================================
+2. ALGORITHMS & MODELS USED
+================================================================================
+
+----------------------
+2.1  GENDER DETECTION
+----------------------
+Algorithm  : Random Forest Classifier (scikit-learn)
+Pipeline   : StandardScaler -> RandomForestClassifier
+Hyperparams:
+  - n_estimators   = 200 (number of decision trees)
+  - max_depth      = 20
+  - min_samples_split = 5
+  - min_samples_leaf  = 2
+  - max_features   = 'sqrt'
+  - class_weight   = 'balanced' (handles class imbalance)
+
+Dataset    : UTKFace (public dataset)
+  - Filename format: [age]_[gender]_[race]_[date].jpg
+  - Labels: 0 = Male, 1 = Female
+
+Feature Extraction (9 categories, ~140+ features per face image):
+  1. Grayscale Histogram          - 16 bins, normalized
+  2. RGB Color Histograms         - 8 bins per channel (24 features)
+  3. HOG-like Gradient Features   - Sobel gradients in X and Y directions
+     - Gradient magnitude histogram (8 bins)
+     - Gradient orientation histogram (8 bins)
+  4. Local Binary Pattern (LBP)   - 8-neighbor LBP, 32-bin histogram
+  5. Face Region Statistics       - Mean & std of upper/middle/lower face zones
+  6. Symmetry Features            - Left-right face symmetry difference
+  7. Laplacian Texture Features   - Mean, std, variance of Laplacian response
+  8. Edge Density                 - Canny edge ratio over image area
+  9. Downsampled Pixel Features   - 8x8 grayscale thumbnail (64 features)
+
+Face Detection:
+  - Haar Cascade Classifier (haarcascade_frontalface_default.xml)
+  - OpenCV's CascadeClassifier with scaleFactor=1.1, minNeighbors=5
+
+Model Format: Pickled sklearn Pipeline saved as gender_model.pkl
+
+
+----------------------------
+2.2  POSE ESTIMATION
+----------------------------
+Library    : Google MediaPipe (mediapipe Python package)
+Module     : mediapipe.solutions.pose
+Config     :
+  - static_image_mode   = False (video/tracking mode)
+  - model_complexity     = 1 (balanced speed/accuracy)
+  - smooth_landmarks     = True
+  - min_detection_conf   = 0.5
+  - min_tracking_conf    = 0.5
+
+Output     : 33 body landmarks (x, y, z, visibility) per frame
+Key landmarks used:
+  - Shoulders  (11, 12)  -> shoulder width for shirt size
+  - Hips       (23, 24)  -> hip width for pant size
+  - Knees      (25, 26)  -> leg height for pant size
+  - Elbows     (13, 14)  -> arm length measurement
+  - Wrists     (15, 16)  -> arm length measurement
+
+Smoothing  : Exponential Moving Average (EMA) on landmark positions
+  - Alpha = 0.5 (balances responsiveness vs. stability)
+
+
+----------------------------
+2.3  PERSON SEGMENTATION
+----------------------------
+Library    : Google MediaPipe
+Module     : mediapipe.solutions.selfie_segmentation
+Config     : model_selection = 1 (general model)
+Output     : Per-pixel segmentation mask (0.0 to 1.0)
+Threshold  : 0.5 (PERSON_TH) for binary person mask
+
+Post-processing:
+  - Morphological closing (elliptical kernel 7x7, 2 iterations)
+  - Morphological opening (elliptical kernel 7x7, 1 iteration)
+  - Gaussian blur for smooth mask edges
+
+
+================================================================================
+3. PREDICTIONS & MEASUREMENTS
+================================================================================
+
+----------------------------
+3.1  CLOTHING SIZE PREDICTION (ML-Powered)
+----------------------------
+Method: Machine Learning classification using trained Gradient Boosting models
+Models: shirt_size_model.pkl, pant_size_model.pkl (scikit-learn pipelines)
+Pipeline: StandardScaler -> GradientBoostingClassifier
+
+Training:
+  - Dataset: Personalized Clothing & Body Measurements Data (Kaggle, 1000 samples)
+  - Labels: Derived from standard clothing size charts
+      Shirt labels: based on shoulder width (S<41cm, M<48cm, L<54cm, XL>=54cm)
+      Pant labels:  based on hip circumference (S<96cm, M<106cm, L<118cm, XL>=118cm)
+  - Features: 6 scale-invariant ratio features per model
+  - Cross-validation: 5-fold stratified, compared SVM/RF/GB classifiers
+  - Best model selected automatically per clothing type
+
+Shirt Size Model (Gradient Boosting, 78.5% accuracy):
+  Features (all computable from MediaPipe landmarks):
+    1. shoulder_torso_ratio  = shoulder_w / torso_h
+    2. shoulder_hip_ratio    = shoulder_w / hip_w
+    3. torso_leg_ratio       = torso_h / leg_h
+    4. shoulder_leg_ratio    = shoulder_w / leg_h
+    5. hip_torso_ratio       = hip_w / torso_h
+    6. body_upper_ratio      = torso_h / (torso_h + leg_h)
+
+Pant Size Model (Gradient Boosting, 71.0% accuracy):
+  Features (all computable from MediaPipe landmarks):
+    1. hip_leg_ratio         = hip_w / leg_h
+    2. hip_shoulder_ratio    = hip_w / shoulder_w
+    3. leg_torso_ratio       = leg_h / torso_h
+    4. hip_torso_ratio       = hip_w / torso_h
+    5. shoulder_leg_ratio    = shoulder_w / leg_h
+    6. body_lower_ratio      = leg_h / (torso_h + leg_h)
+
+Runtime Feature Engineering:
+  - All features are RATIOS of visible body dimensions (pixel-based)
+  - Scale-invariant: same ratio in cm or pixels (camera distance irrelevant)
+  - 4 base measurements from MediaPipe pose:
+      shoulder_w = ||left_shoulder - right_shoulder|| (pixels)
+      torso_h    = avg(hip_y) - avg(shoulder_y) (pixels)
+      hip_w      = ||left_hip - right_hip|| (pixels)
+      leg_h      = avg(knee_y) - avg(hip_y) (pixels)
+
+Fallback: If ML models fail to load, rule-based ratio thresholds are used
+
+Stabilization:
+  - SizeStabilizer class uses a voting mechanism over 25 frames
+  - New size requires >70% confidence (agreement) to change
+  - Prevents rapid flickering between sizes
+
+
+----------------------------
+3.2  DISTANCE VALIDATION
+----------------------------
+Method: Shoulder pixel-width calibration
+
+  - Target   : User must stand at ~6 feet from camera
+  - Reference: At 6 feet, shoulder width ≈ 150px (typical webcam)
+  - Tolerance: ±20px (i.e., 130–170px range accepted)
+  - States   : TOO FAR / TOO CLOSE / Distance OK
+  - Size detection only triggers when distance is validated
+
+
+----------------------------
+3.3  BODY MEASUREMENTS (body_measurements.py)
+----------------------------
+Method: MediaPipe pose landmarks + pixel-to-cm calibration
+
+Calibration Reference:
+  - Male torso height (shoulder-to-hip) = 42.0 cm
+  - Female torso height                 = 39.0 cm
+  - pixel_to_cm ratio computed per frame from torso height
+
+Measurements Computed:
+  1. Shoulder Width (cm)   - Euclidean distance between left & right shoulder
+  2. Chest Circumference   - Estimated from shoulder width (multiplier-based)
+  3. Arm Length (cm)        - shoulder→elbow→wrist chain distance
+     - Short sleeve mode   : shoulder→elbow only
+     - Long sleeve mode    : shoulder→elbow→wrist
+
+Size Chart Matching (cm ranges):
+  Male sizes:
+    XS: shoulder 38-41, chest 81-86,  arm 58-61
+    S : shoulder 41-44, chest 86-91,  arm 61-63
+    M : shoulder 44-47, chest 91-101, arm 63-65
+    L : shoulder 47-50, chest 101-111, arm 65-67
+    XL: shoulder 50-54, chest 111-121, arm 67-70
+
+Smoothing: Rolling average buffer over 12 frames
+
+
+================================================================================
+4. COMPUTER VISION TECHNIQUES
+================================================================================
+
+----------------------------
+4.1  CLOTHING OVERLAY (AR Try-On)
+----------------------------
+
+Lighting Adaptation:
+  - LAB color space conversion for luminance matching
+  - Matches shirt luminance to body region luminance
+  - Strength parameter: 0.4 (40% adaptation)
+
+Body Shading:
+  - Shadow map from inverted grayscale (Gaussian-blurred, sigma=9)
+  - Highlight map from grayscale (Gaussian-blurred, sigma=9)
+  - Shadow strength: 0.35, Highlight strength: 0.15
+  - Creates depth/3D effect on overlaid clothing
+
+Alpha Blending:
+  - Soft-edge alpha compositing for natural blending
+  - Erosion + Gaussian blur on alpha channel for smooth edges
+  - Per-pixel: blended = alpha * shirt + (1 - alpha) * background
+
+Neck Cutout:
+  - Elliptical mask around neck region
+  - Smooth exponential falloff (no hard edges)
+  - Width ratio 1.2x, height ratio 0.7x of neck radius
+
+Size Presets (scale factors per detected size):
+  S  : width 1.50x, height 1.45x, y_lift 0.30
+  M  : width 1.65x, height 1.55x, y_lift 0.28
+  L  : width 1.80x, height 1.70x, y_lift 0.26
+  XL : width 1.95x, height 1.85x, y_lift 0.24
+
+
+----------------------------
+4.2  IMAGE PROCESSING
+----------------------------
+  - Haar Cascade face detection (OpenCV)
+  - Sobel edge detection (gradient computation)
+  - Canny edge detection (edge density features)
+  - Laplacian filter (texture analysis)
+  - Gaussian blur (mask smoothing, shading maps)
+  - Morphological operations (mask cleanup)
+  - Color space conversions: BGR <-> RGB, BGR <-> GRAY, BGR <-> LAB, BGR <-> HSV
+
+
+================================================================================
+5. SYSTEM ARCHITECTURE
+================================================================================
+
+Backend:
+  - Flask web server (server.py) on port 5000
+  - MJPEG video streaming via /tryon_feed endpoint
+  - REST API endpoints for status, gender, products
+  - MySQL database integration for product catalog
+  - Flask-CORS enabled for cross-origin requests
+  - Threaded mode for concurrent request handling
+
+Frontend:
+  - Single-page HTML/CSS/JS application (index.html)
+  - Real-time video feed display
+  - Interactive controls for clothing navigation
+
+Standalone Mode:
+  - app.py runs OpenCV window directly (no server needed)
+  - Keyboard controls: A/D (navigate), R (reset), Q (quit)
+
+
+================================================================================
+6. STATE MACHINE FLOW
+================================================================================
+
+  GENDER_COUNTDOWN (3 sec)
+       |
+       v
+  GENDER_DETECT
+       |
+       +---> [Female] ---> FEMALE_BLOCKED (polite message, wait for reset)
+       |
+       +---> [Male] ----> COUNTDOWN (5 sec, distance calibration)
+                              |
+                              v
+                          DETECTING (size measurement at 6 feet)
+                              |
+                              v
+                          READY (sizes locked, clothing overlay active)
+                              |
+                              v
+                          [Auto-reset after 30 minutes]
+
+  Press [R] at any time -> Reset to GENDER_COUNTDOWN
+
+
+================================================================================
+7. KEY LIBRARIES & DEPENDENCIES
+================================================================================
+
+  - OpenCV (cv2)         : Image processing, video capture, drawing
+  - NumPy                : Numerical operations, array processing
+  - MediaPipe            : Pose estimation, selfie segmentation
+  - scikit-learn         : Random Forest classifier, StandardScaler, Pipeline
+  - Flask                : Web server, REST API
+  - Flask-CORS           : Cross-origin resource sharing
+  - mysql-connector      : MySQL database connectivity
+  - pickle               : Model serialization/deserialization
+
+
+================================================================================
+8. FILE STRUCTURE
+================================================================================
+
+  virtual-tryon/
+    server.py               - Flask web server with video streaming
+    app.py                  - Standalone OpenCV application
+    tryon_engine.py         - Core try-on engine (pose, sizing, overlay)
+    gender_detector.py      - Gender detection module (sklearn inference)
+    train_gender_model.py   - Gender model training script (Random Forest)
+    train_size_model.py     - Size model training script (Gradient Boosting)
+    body_measurements.py    - Body measurement estimation module
+    mediapipe_compat.py     - MediaPipe compatibility/fallback layer
+    gender_model.pkl        - Trained gender classification model
+    shirt_size_model.pkl    - Trained shirt size prediction model (GB, 78.5%)
+    pant_size_model.pkl     - Trained pant size prediction model (GB, 71.0%)
+    shirts/                 - Clothing image assets (PNG/JPG with transparency)
+
+  datasets/
+    clothing_size/
+      personalized_clothing_dataset.csv - Training data (1000 samples, 19 cols)
+
+  frontend/
+    index.html              - Web-based user interface
+
+================================================================================
+                          END OF DOCUMENTATION
+================================================================================

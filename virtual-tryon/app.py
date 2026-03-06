@@ -1,6 +1,7 @@
 import cv2
 import sys
 from tryon_engine import TryOnEngine
+from gender_detector import GenderDetector
 
 # -------------------------
 # Camera
@@ -11,7 +12,10 @@ cap = cv2.VideoCapture(CAM_INDEX)
 if not cap.isOpened():
     raise RuntimeError("[ERROR] Cannot open camera. Check permissions or if another app is using the camera.")
 
+# Initialize gender detector and try-on engine
+gender_det = GenderDetector()
 engine = TryOnEngine(shirt_dir="shirts")
+engine.set_gender_detector(gender_det)
 
 print("[OK] Running... Controls: [A] prev shirt | [D] next shirt | [R] reset for next user | [Q]/[ESC] exit")
 print("[INFO] Stand at 7.5 feet from camera for accurate sizing")
@@ -26,9 +30,19 @@ while True:
 
     h, w = frame.shape[:2]
     
-    # Show countdown state
+    # Show state-based overlays
     state = info['state']
-    if state == "COUNTDOWN":
+    
+    if state == "GENDER_COUNTDOWN":
+        gc = info.get('gender_countdown', 0)
+        cv2.putText(frame, f"Gender Detection: {gc}s", (15, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 255), 3, cv2.LINE_AA)
+        cv2.putText(frame, "Please face the camera", (15, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+    
+    elif state == "FEMALE_BLOCKED":
+        # The engine already renders the overlay message on the frame
+        pass
+    
+    elif state == "COUNTDOWN":
         countdown = info['countdown']
         cv2.putText(frame, f"Countdown: {countdown} seconds", (15, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 255), 3, cv2.LINE_AA)
         # Show distance feedback during countdown
@@ -54,8 +68,11 @@ while True:
         cv2.putText(frame, f"Pants: {pant_size}", (15, 130), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 2, cv2.LINE_AA)
         cv2.putText(frame, f"Item: {info['filename']}", (15, 170), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1, cv2.LINE_AA)
     
-    # Show controls
-    cv2.putText(frame, "[A/D] Change item | [R] Next user | [Q] Exit", (15, h-15), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
+    # Show controls (only if not blocked)
+    if state != "FEMALE_BLOCKED":
+        cv2.putText(frame, "[A/D] Change item | [R] Next user | [Q] Exit", (15, h-15), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
+    else:
+        cv2.putText(frame, "[R] Next user | [Q] Exit", (15, h-15), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
 
     cv2.imshow("Virtual Try-On (Size Detection)", frame)
 
