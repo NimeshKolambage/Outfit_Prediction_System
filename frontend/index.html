@@ -41,7 +41,6 @@
             scrollbar-width: none;
         }
 
-        /* Hide scrollbar for clean look */
         body::-webkit-scrollbar {
             display: none;
         }
@@ -56,7 +55,6 @@
             display: none;
         }
 
-        /* Navigation */
         nav {
             display: flex;
             justify-content: space-between;
@@ -69,7 +67,6 @@
             background: transparent;
         }
 
-        /* YouTube Video Background Section */
         .video-hero {
             position: relative;
             width: 100%;
@@ -137,7 +134,6 @@
             text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
         }
 
-        /* Featured Brands Section */
         .brands-section {
             background: var(--bg-dark);
             padding: 60px 40px;
@@ -185,9 +181,6 @@
             object-fit: contain;
         }
 
-
-
-        /* Content Section Below Video */
         .content-section {
             position: relative;
             z-index: 1;
@@ -260,12 +253,9 @@
         }
 
         @keyframes btnGlow {
-
-            0%,
-            100% {
+            0%, 100% {
                 box-shadow: 0 0 40px var(--glow), 0 0 80px rgba(37, 99, 235, 0.3);
             }
-
             50% {
                 box-shadow: 0 0 60px var(--glow), 0 0 100px rgba(37, 99, 235, 0.5);
             }
@@ -342,7 +332,6 @@
                 opacity: 0;
                 transform: translateY(-20px) scale(0.95);
             }
-
             to {
                 opacity: 1;
                 transform: translateY(0) scale(1);
@@ -528,7 +517,6 @@
             z-index: 10;
         }
 
-        /* Gender Detection Badge */
         .gender-badge {
             position: absolute;
             bottom: 24px;
@@ -572,7 +560,6 @@
             font-size: 28px;
         }
 
-        /* Size Info Badge */
         .size-badge {
             position: absolute;
             bottom: 24px;
@@ -685,13 +672,10 @@
         }
 
         @keyframes pulse {
-
-            0%,
-            100% {
+            0%, 100% {
                 opacity: 1;
                 transform: scale(1);
             }
-
             50% {
                 opacity: 0.6;
                 transform: scale(0.9);
@@ -703,7 +687,6 @@
                 opacity: 0;
                 transform: translateY(20px);
             }
-
             to {
                 opacity: 1;
                 transform: translateY(0);
@@ -746,7 +729,6 @@
             background: rgba(239, 68, 68, 0.2);
         }
 
-        /* Loading State */
         .loading {
             display: none;
             flex-direction: column;
@@ -779,7 +761,6 @@
             }
         }
 
-        /* Error Message */
         .error-message {
             display: none;
             background: rgba(239, 68, 68, 0.1);
@@ -800,7 +781,6 @@
             font-size: 14px;
         }
 
-        /* Footer */
         footer {
             text-align: center;
             padding: 40px;
@@ -811,7 +791,6 @@
             border-top: 1px solid var(--border);
         }
 
-        /* Responsive */
         @media (max-width: 768px) {
             nav {
                 padding: 16px 24px;
@@ -863,7 +842,6 @@
             }
         }
 
-        /* Products Section Styles */
         .products-section {
             background: var(--bg-dark);
             min-height: 100vh;
@@ -1031,7 +1009,7 @@
         </div>
     </nav>
 
-    <!-- Clothing Selection Modal -->
+    <!-- Clothing Selection Modal (used only for "Change Clothing" in camera controls) -->
     <div class="modal-overlay" id="clothing-modal">
         <div class="modal">
             <div class="modal-header">
@@ -1157,7 +1135,8 @@
                 before you buy — see exactly how they look on you in real-time.
             </p>
 
-            <button class="btn-get-started" onclick="openClothingModal()">
+            <!-- "Try On Now" goes directly to camera, skipping the clothing selection modal -->
+            <button class="btn-get-started" onclick="startDirectCamera()">
                 <span>
                     Try On Now
                     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
@@ -1249,11 +1228,11 @@
                 <div class="size-badge" id="size-badge">
                     <div class="label">Predicted Size</div>
                     <div class="size-row">
-                        
+                        <span> T-Shirt</span>
                         <span class="size-val pending" id="size-shirt">--</span>
                     </div>
                     <div class="size-row">
-                        <span>👖 Pant</span>
+                        <span>Pant</span>
                         <span class="size-val pending" id="size-pant">--</span>
                     </div>
                     <div class="state-indicator" id="state-indicator">STANDBY</div>
@@ -1325,7 +1304,6 @@
             <h2>Our Collection</h2>
             <p>Browse our latest collection and virtually try on your favorite items</p>
         </div>
-        <!-- Filter Label and Clear Button -->
         <div id="filter-controls" style="display: none; max-width: 1200px; margin: 0 auto 30px; padding: 0 40px; display: flex; justify-content: space-between; align-items: center;">
             <div id="filter-label" style="font-size: 0.95rem; color: var(--text-secondary); font-weight: 500;"></div>
             <button id="clear-filter-btn" onclick="clearFilter()" style="padding: 8px 16px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.85rem; transition: all 0.2s ease;" onmouseover="this.style.background='rgba(239, 68, 68, 0.2)'" onmouseout="this.style.background='rgba(239, 68, 68, 0.1)'">Clear Filter</button>
@@ -1357,7 +1335,6 @@
     </footer>
 
     <script>
-        // Flask Server Configuration
         const SERVER_URL = 'http://localhost:5000';
 
         let genderUpdateInterval = null;
@@ -1387,13 +1364,19 @@
             'denim': 'Denim'
         };
 
+        // NEW: Go directly to camera without showing the clothing selection modal
+        function startDirectCamera() {
+            selectedClothingType = null;
+            clothingBadge.textContent = '';
+            startCamera();
+        }
+
         function openClothingModal() {
             clothingModal.classList.add('active');
         }
 
         function closeModal() {
             clothingModal.classList.remove('active');
-            // Reset selection if not continuing
             if (!cameraSection.classList.contains('active')) {
                 document.querySelectorAll('.clothing-option').forEach(opt => opt.classList.remove('selected'));
                 selectedClothingType = null;
@@ -1402,9 +1385,7 @@
         }
 
         function selectClothing(element) {
-            // Remove selection from all options
             document.querySelectorAll('.clothing-option').forEach(opt => opt.classList.remove('selected'));
-            // Add selection to clicked option
             element.classList.add('selected');
             selectedClothingType = element.dataset.type;
             btnContinue.disabled = false;
@@ -1435,7 +1416,6 @@
                 const gender = data.gender;
                 genderText.textContent = gender;
 
-                // Update styling based on gender
                 genderValue.classList.remove('male', 'female');
 
                 if (gender === 'Male') {
@@ -1454,7 +1434,6 @@
         }
 
         async function startCamera() {
-            // Show camera section and hide landing
             landingSection.style.display = 'none';
             cameraSection.classList.add('active');
             loading.classList.add('active');
@@ -1462,23 +1441,19 @@
             cameraContainer.style.display = 'none';
 
             try {
-                // Check if server is running
                 const status = await checkServerStatus();
 
                 if (!status) {
                     throw new Error('Server not running');
                 }
 
-                // Set video feed source to Flask server MJPEG try-on stream
                 videoFeed.src = `${SERVER_URL}/tryon_feed`;
 
-                // Wait for image to load
                 videoFeed.onload = () => {
                     loading.classList.remove('active');
                     cameraContainer.style.display = 'block';
                     isStreaming = true;
 
-                    // Start polling for gender updates
                     genderUpdateInterval = setInterval(updateGenderDisplay, 500);
                     tryonUpdateInterval = setInterval(updateTryOnStatus, 500);
                 };
@@ -1503,7 +1478,6 @@
         function stopCamera() {
             isStreaming = false;
 
-            // Stop gender update polling
             if (genderUpdateInterval) {
                 clearInterval(genderUpdateInterval);
                 genderUpdateInterval = null;
@@ -1514,11 +1488,9 @@
                 tryonUpdateInterval = null;
             }
 
-            // Clear video source
             videoFeed.src = '';
             cameraContainer.style.display = 'none';
 
-            // Reset gender display
             genderText.textContent = 'Detecting...';
             document.querySelector('.gender-icon').textContent = '🔍';
             genderValue.classList.remove('male', 'female');
@@ -1536,18 +1508,15 @@
                 const response = await fetch(`${SERVER_URL}/api/tryon/status`);
                 const data = await response.json();
 
-                // Update clothing badge
                 const shirtSize = data.user_size_shirt || '--';
                 const pantSize = data.user_size_pant || '--';
                 clothingBadge.textContent = `${data.item_type}: ${data.filename}`;
 
-                // Update size display
                 sizeShirtEl.textContent = shirtSize;
                 sizePantEl.textContent = pantSize;
                 sizeShirtEl.className = 'size-val' + (shirtSize === '--' ? ' pending' : '');
                 sizePantEl.className = 'size-val' + (pantSize === '--' ? ' pending' : '');
 
-                // Update product filter if products section is visible
                 const productsSection = document.getElementById('products-section');
                 if (productsSection && productsSection.classList.contains('active') && document.getElementById('products-grid')?.style.display === 'grid') {
                     if (shirtSize !== '--' || pantSize !== '--') {
@@ -1558,7 +1527,6 @@
                     }
                 }
 
-                // Update state indicator
                 const state = data.state || 'STANDBY';
                 const countdown = data.countdown || 0;
                 let stateText = state;
@@ -1569,7 +1537,6 @@
                 stateIndicatorEl.className = 'state-indicator' +
                     (data.size_locked ? ' locked' : (state === 'COUNTDOWN' || state === 'DETECTING' ? '' : ''));
 
-                // Update distance warning
                 const warn = data.distance_warning || '';
                 distanceWarningEl.textContent = warn;
                 distanceWarningEl.className = 'distance-warning' + (data.distance_valid ? ' ok' : '');
@@ -1606,7 +1573,6 @@
         async function resetUser() {
             try {
                 await fetch(`${SERVER_URL}/api/tryon/reset`);
-                // Reset local size display immediately
                 sizeShirtEl.textContent = '--';
                 sizePantEl.textContent = '--';
                 sizeShirtEl.className = 'size-val pending';
@@ -1624,7 +1590,6 @@
             cameraSection.classList.remove('active');
             landingSection.style.display = 'flex';
             errorMessage.classList.remove('active');
-            // Reset clothing selection
             document.querySelectorAll('.clothing-option').forEach(opt => opt.classList.remove('selected'));
             selectedClothingType = null;
             btnContinue.disabled = true;
@@ -1651,11 +1616,9 @@
             const productsGrid = document.getElementById('products-grid');
             const productsEmpty = document.getElementById('products-empty');
 
-            // Hide camera and show products section
             cameraSection.classList.remove('active');
             productsSection.classList.add('active');
 
-            // Show loading
             productsLoading.style.display = 'block';
             productsGrid.style.display = 'none';
             productsEmpty.style.display = 'none';
@@ -1673,12 +1636,12 @@
                         card.className = 'product-card';
                         card.setAttribute('data-category', product.category.toLowerCase());
                         card.setAttribute('data-size', product.size);
-                        
+
                         let imageHTML = '<div style="font-size: 5rem;">👕</div>';
                         if (product.image_path) {
                             imageHTML = `<img src="${SERVER_URL}/api/image/${product.image_path}" alt="${product.name}" loading="lazy" onerror="this.style.display='none';">`;
                         }
-                        
+
                         card.innerHTML = `
                             <div class="product-card-image">
                                 ${imageHTML}
@@ -1695,8 +1658,7 @@
                         productsGrid.appendChild(card);
                     });
                     productsGrid.style.display = 'grid';
-                    
-                    // Auto-apply filter if predicted sizes are available
+
                     const shirtSize = document.getElementById('size-shirt')?.textContent;
                     const pantsSize = document.getElementById('size-pant')?.textContent;
                     if (shirtSize && shirtSize !== '--' || pantsSize && pantsSize !== '--') {
@@ -1731,7 +1693,6 @@
             console.log('Selected product:', productId);
         }
 
-        // ============== PRODUCT FILTERING BY PREDICTED SIZES ==============
         let currentPredictedSizes = null;
 
         function applyPredictedFilter(prediction) {
@@ -1782,8 +1743,6 @@
             } else {
                 filterControls.style.display = 'none';
             }
-
-            console.log(`[Filter] Applied - Visible: ${visibleCount}/${cards.length}`);
         }
 
         function clearFilter() {
@@ -1799,7 +1758,6 @@
             });
 
             filterControls.style.display = 'none';
-            console.log('[Filter] Cleared');
         }
     </script>
 </body>

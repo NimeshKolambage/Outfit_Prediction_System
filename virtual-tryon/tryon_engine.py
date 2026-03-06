@@ -9,6 +9,7 @@ import os
 import math
 import glob
 import time
+import pickle
 from collections import Counter
 import mediapipe_compat as mp
 
@@ -28,12 +29,20 @@ STABLE_FRAMES = 25  # Increased stability buffer (was 10)
 RATIO_CHANGE_THRESHOLD = 0.08  # Minimum ratio change to trigger size update (new)
 
 
-# Scale presets per size
+# Scale presets per size (shirts: S/M/L/XL, pants: numeric waist)
 SIZE_PRESETS = {
+    # Shirt sizes
     "S":  {"width_scale": 1.50, "height_scale": 1.45, "y_lift": 0.30},
     "M":  {"width_scale": 1.65, "height_scale": 1.55, "y_lift": 0.28},
     "L":  {"width_scale": 1.80, "height_scale": 1.70, "y_lift": 0.26},
     "XL": {"width_scale": 1.95, "height_scale": 1.85, "y_lift": 0.24},
+    # Pant sizes (numeric waist inches)
+    "28": {"width_scale": 1.40, "height_scale": 1.40, "y_lift": 0.30},
+    "30": {"width_scale": 1.50, "height_scale": 1.45, "y_lift": 0.30},
+    "32": {"width_scale": 1.60, "height_scale": 1.52, "y_lift": 0.28},
+    "34": {"width_scale": 1.70, "height_scale": 1.60, "y_lift": 0.27},
+    "36": {"width_scale": 1.80, "height_scale": 1.70, "y_lift": 0.26},
+    "38": {"width_scale": 1.95, "height_scale": 1.85, "y_lift": 0.24},
 }
 
 
@@ -235,6 +244,10 @@ class TryOnEngine:
 
     SUPPORTED_FORMATS = ['*.png', '*.jpg', '*.jpeg', '*.webp', '*.bmp']
 
+    def set_gender_detector(self, gender_detector):
+        """Set the gender detector instance for gender-gated try-on."""
+        self.gender_detector = gender_detector
+
     def _validate_distance(self, shoulder_w_px):
         """
         Validate user is at EXACTLY 6 feet (5.8-6.2 ft tolerance).
@@ -277,14 +290,23 @@ class TryOnEngine:
         self.pant_stabilizer  = SizeStabilizer(initial_size="M", need_frames=STABLE_FRAMES)
         self.smoother = LandmarkSmoother(alpha=0.5)
         
+        # Gender detection phase
+        self.gender_detector = None  # Set via set_gender_detector()
+        self.gender_countdown_active = True  # Start with gender countdown
+        self.gender_countdown_start = time.time()
+        self.gender_countdown_duration = 3  # 3 seconds for gender detection
+        self.detected_gender = None  # "Male" or "Female"
+        self.gender_confirmed = False  # True after gender is determined
+        self.female_blocked = False  # True if female detected
+        
         # Countdown + One-time detection system
-        self.countdown_active = True  # Start with countdown
-        self.countdown_start_time = time.time()  # When countdown began
+        self.countdown_active = False  # Starts after gender confirmed as Male
+        self.countdown_start_time = None  # When countdown began
         self.countdown_duration = 5  # 5 seconds to prepare
         self.detection_ready = False  # Ready to detect after countdown
         self.locked_size = None  # Will be set on one-time detection
         self.size_locked = False  # Flag to track if size is locked
-        self.display_state = "STANDBY"  # STANDBY, COUNTDOWN, DETECTING, READY
+        self.display_state = "GENDER_COUNTDOWN"  # GENDER_COUNTDOWN, GENDER_DETECT, FEMALE_BLOCKED, COUNTDOWN, DETECTING, READY
         self.distance_warning = ""  # Distance validation message
         self.distance_warning_color = "white"  # Color for warning text
         
@@ -297,6 +319,11 @@ class TryOnEngine:
         self.locked_pant_size = None
         self.lock_start_time = None  # When sizes were locked
         self.auto_reset_timeout = 30 * 60  # 30 minutes in seconds
+
+        # Load ML size prediction models
+        self.shirt_size_model = None
+        self.pant_size_model = None
+        self._load_size_models()
 
         self._load_clothing()
 
@@ -377,6 +404,54 @@ class TryOnEngine:
         self.is_size_locked = False  # Reset new flag
         self.is_distance_valid = False
     
+    def _update_gender_countdown(self, frame):
+        """Update gender detection countdown and detect gender after 3 seconds."""
+        if not self.gender_countdown_active:
+            return
+        
+        elapsed = time.time() - self.gender_countdown_start
+        remaining = self.gender_countdown_duration - elapsed
+        
+        if remaining <= 0:
+            # Timer expired - detect gender now
+            self.gender_countdown_active = False
+            self.display_state = "GENDER_DETECT"
+            
+            detected = "Male"  # Default fallback
+            if self.gender_detector is not None and self.gender_detector.model_loaded:
+                results = self.gender_detector.detect_gender(frame)
+                if results:
+                    detected = results[0]['gender']
+                    print(f"[OK] Gender detected: {detected} (confidence: {results[0]['confidence']:.2f})")
+                else:
+                    print("[WARNING] No face detected during gender check, defaulting to Male")
+            else:
+                print("[WARNING] Gender model not loaded, defaulting to Male")
+            
+            self.detected_gender = detected
+            self.gender_confirmed = True
+            
+            if detected == "Female":
+                self.female_blocked = True
+                self.display_state = "FEMALE_BLOCKED"
+                print("[INFO] Female detected - try-on unavailable")
+            else:
+                # Male confirmed - start the distance/size countdown
+                self.countdown_active = True
+                self.countdown_start_time = time.time()
+                self.display_state = "COUNTDOWN"
+                print("[INFO] Male confirmed - proceeding to size detection")
+        else:
+            self.display_state = "GENDER_COUNTDOWN"
+    
+    def _get_gender_countdown_remaining(self):
+        """Get remaining seconds on gender countdown."""
+        if not self.gender_countdown_active:
+            return 0
+        elapsed = time.time() - self.gender_countdown_start
+        remaining = self.gender_countdown_duration - elapsed
+        return max(0, int(remaining) + 1)
+
     def _update_countdown(self):
         """Update countdown and transition to detection phase."""
         if self.countdown_active:
@@ -396,8 +471,16 @@ class TryOnEngine:
     
     def reset_for_next_user(self):
         """Reset all detection states for next user - press R key."""
-        self.countdown_active = True
-        self.countdown_start_time = time.time()
+        # Reset gender detection phase
+        self.gender_countdown_active = True
+        self.gender_countdown_start = time.time()
+        self.detected_gender = None
+        self.gender_confirmed = False
+        self.female_blocked = False
+        
+        # Reset size detection phase
+        self.countdown_active = False
+        self.countdown_start_time = None
         self.detection_ready = False
         self.locked_size = None
         self.locked_shirt_size = None
@@ -406,9 +489,9 @@ class TryOnEngine:
         self.size_locked = False
         self.is_size_locked = False  # Reset size locked flag
         self.is_distance_valid = False  # Reset distance flag
-        self.display_state = "STANDBY"
+        self.display_state = "GENDER_COUNTDOWN"
         self.smoother.reset()
-        print("[INFO] Reset for next user. 5-second countdown starting...")
+        print("[INFO] Reset for next user. Gender detection starting (3s)...")
 
     def reload_clothing(self):
         """Reload clothing from folder."""
@@ -435,44 +518,192 @@ class TryOnEngine:
         person = cv2.morphologyEx(person, cv2.MORPH_OPEN, kernel, iterations=1)
         return cv2.GaussianBlur(person.astype(np.float32) / 255.0, (0, 0), 5)
 
-    def _predict_size(self, width, height, is_pants=False):
-        """Predict size based on body proportions with angle detection.
+    def _load_size_models(self):
+        """Load trained ML models for shirt and pant size prediction."""
+        model_dir = os.path.dirname(os.path.abspath(__file__))
         
-        For shirts: uses shoulder width / torso height (ratio: 0.55-0.85)
-        For pants: uses hip width / leg height (ratio: 0.20-0.45, different range)
-        """
-        ratio = width / (height + 1e-6)
+        shirt_path = os.path.join(model_dir, "shirt_size_model.pkl")
+        pant_path = os.path.join(model_dir, "pant_size_model.pkl")
         
-        if is_pants:
-           # Pants ratio (Ina / Kalisame diga wage)
-           # Lankawe ayage ina (waist) poddak adu nisa values chuttak pahalata gaththa.
-           ratio = float(np.clip(ratio, 0.15, 0.50))
-           
-           # Ranges Adjusted for SL
-           if ratio < 0.20:        # Kalin 0.22 (S eka poddak narrow kara)
-               return "S"
-           elif ratio < 0.27:      # Kalin 0.30 (M eka 0.27n iwara kara)
-               return "M"
-           elif ratio < 0.35:      # Kalin 0.38 (L eka 0.35n iwara kara)
-               return "L"
-           return "XL"
-           
+        if os.path.exists(shirt_path):
+            try:
+                with open(shirt_path, 'rb') as f:
+                    self.shirt_size_model = pickle.load(f)
+                print(f"[OK] Shirt size model loaded (v{self.shirt_size_model.get('version', '?')})")
+            except Exception as e:
+                print(f"[WARN] Failed to load shirt model: {e}")
+                self.shirt_size_model = None
         else:
-            # Shirts: Shoulder width / Torso height
+            print("[WARN] shirt_size_model.pkl not found - using rule-based fallback")
+        
+        if os.path.exists(pant_path):
+            try:
+                with open(pant_path, 'rb') as f:
+                    self.pant_size_model = pickle.load(f)
+                print(f"[OK] Pant size model loaded (v{self.pant_size_model.get('version', '?')})")
+            except Exception as e:
+                print(f"[WARN] Failed to load pant model: {e}")
+                self.pant_size_model = None
+        else:
+            print("[WARN] pant_size_model.pkl not found - using rule-based fallback")
+
+    def _predict_size(self, shoulder_w, torso_h, hip_w, leg_h, is_pants=False):
+        """
+        Predict clothing size using ML model with MediaPipe measurements.
+        
+        Uses runtime-compatible ratio features (scale-invariant) that match
+        the training features exactly. Falls back to rule-based thresholds
+        if ML models are not loaded.
+        
+        Args:
+            shoulder_w: shoulder width in pixels (left-right shoulder distance)
+            torso_h:    torso height in pixels (shoulder to hip distance)
+            hip_w:      hip width in pixels (left-right hip distance)
+            leg_h:      leg height in pixels (hip to knee distance)
+            is_pants:   True for pant sizing, False for shirt sizing
+        
+        Returns:
+            Size string: "S", "M", "L", or "XL"
+        """
+        # Try ML prediction first
+        try:
+            if is_pants and self.pant_size_model is not None:
+                # Pant features: same order as training
+                features = np.array([[
+                    hip_w / (leg_h + 1e-6),           # hip_leg_ratio
+                    hip_w / (shoulder_w + 1e-6),      # hip_shoulder_ratio
+                    leg_h / (torso_h + 1e-6),         # leg_torso_ratio
+                    hip_w / (torso_h + 1e-6),         # hip_torso_ratio
+                    shoulder_w / (leg_h + 1e-6),      # shoulder_leg_ratio
+                    leg_h / (torso_h + leg_h + 1e-6)  # body_lower_ratio
+                ]])
+                pred_idx = self.pant_size_model['model'].predict(features)[0]
+                pred_size = self.pant_size_model['label_encoder'].inverse_transform([pred_idx])[0]
+                print(f"[ML] Pant prediction: {pred_size} (features: hip_leg={features[0][0]:.3f})")
+                return pred_size
+                
+            elif not is_pants and self.shirt_size_model is not None:
+                # Shirt features: same order as training
+                features = np.array([[
+                    shoulder_w / (torso_h + 1e-6),       # shoulder_torso_ratio
+                    shoulder_w / (hip_w + 1e-6),         # shoulder_hip_ratio
+                    torso_h / (leg_h + 1e-6),            # torso_leg_ratio
+                    shoulder_w / (leg_h + 1e-6),         # shoulder_leg_ratio
+                    hip_w / (torso_h + 1e-6),            # hip_torso_ratio
+                    torso_h / (torso_h + leg_h + 1e-6)   # body_upper_ratio
+                ]])
+                pred_idx = self.shirt_size_model['model'].predict(features)[0]
+                pred_size = self.shirt_size_model['label_encoder'].inverse_transform([pred_idx])[0]
+                print(f"[ML] Shirt prediction: {pred_size} (features: sh_torso={features[0][0]:.3f})")
+                return pred_size
+                
+        except Exception as e:
+            print(f"[WARN] ML prediction failed, using fallback: {e}")
+        
+        # ─── Rule-based fallback ───
+        return self._predict_size_fallback(shoulder_w, torso_h, hip_w, leg_h, is_pants)
+
+    def _predict_size_fallback(self, shoulder_w, torso_h, hip_w, leg_h, is_pants=False):
+        """Rule-based size prediction fallback (original hardcoded thresholds)."""
+        if is_pants:
+            ratio = hip_w / (leg_h + 1e-6)
+            ratio = float(np.clip(ratio, 0.15, 0.50))
+            if ratio < 0.18:
+                return "28"
+            elif ratio < 0.22:
+                return "30"
+            elif ratio < 0.27:
+                return "32"
+            elif ratio < 0.32:
+                return "34"
+            elif ratio < 0.38:
+                return "36"
+            return "38"
+        else:
+            ratio = shoulder_w / (torso_h + 1e-6)
             ratio = float(np.clip(ratio, 0.55, 0.85))
-            
-            # Lankawe ayage shoulders poddak keti nisa L ekata wada M range eka adu kala
-            if ratio < 0.60:        # S size
+            if ratio < 0.60:
                 return "S"
-            elif ratio < 0.67:      # M size (0.67n iwara wenawa, ethakota 0.68-0.70 aya L wenawa)
+            elif ratio < 0.67:
                 return "M"
-            elif ratio < 0.75:      # L size
+            elif ratio < 0.75:
                 return "L"
             return "XL"
         
 
     def process_frame(self, frame_bgr):
         """Process frame and overlay clothing."""
+        # --- Gender detection phase (runs BEFORE size detection) ---
+        self._update_gender_countdown(frame_bgr)
+        gender_countdown = self._get_gender_countdown_remaining()
+        
+        # If female is blocked, return early with the message
+        if self.female_blocked:
+            frame = frame_bgr.copy()
+            h, w = frame.shape[:2]
+            # Dark overlay
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
+            frame = cv2.addWeighted(overlay, 0.5, frame, 0.5, 0)
+            
+            # Formal message
+            msg1 = "We apologize for the inconvenience."
+            msg2 = "Our virtual try-on is currently available"
+            msg3 = "for men's clothing only."
+            msg4 = "Women's collection coming soon!"
+            msg5 = "Press [R] to reset for another user."
+            
+            cv2.putText(frame, msg1, (w//2 - 280, h//2 - 80), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (100, 180, 255), 2, cv2.LINE_AA)
+            cv2.putText(frame, msg2, (w//2 - 280, h//2 - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(frame, msg3, (w//2 - 280, h//2 + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(frame, msg4, (w//2 - 280, h//2 + 60), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (180, 230, 255), 2, cv2.LINE_AA)
+            cv2.putText(frame, msg5, (w//2 - 220, h//2 + 120), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (150, 150, 150), 1, cv2.LINE_AA)
+            
+            return frame, {
+                "user_size_shirt": "--",
+                "user_size_pant": "--",
+                "item_type": "Shirt",
+                "filename": self.get_current_shirt_name(),
+                "countdown": 0,
+                "gender_countdown": 0,
+                "detected_gender": self.detected_gender,
+                "state": "FEMALE_BLOCKED",
+                "size_locked": False,
+                "distance_valid": False,
+                "distance_warning": "",
+                "distance_warning_color": "white",
+            }
+        
+        # If still in gender countdown, show countdown overlay but still render camera
+        if self.gender_countdown_active:
+            frame = frame_bgr.copy()
+            h, w = frame.shape[:2]
+            remaining = self._get_gender_countdown_remaining()
+            cv2.putText(frame, "GENDER DETECTION", (w//2 - 200, h//2 - 60), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 255, 255), 3, cv2.LINE_AA)
+            cv2.putText(frame, "Please face the camera...", (w//2 - 200, h//2 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(frame, str(remaining), (w//2 - 20, h//2 + 60), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (0, 255, 255), 4, cv2.LINE_AA)
+            
+            # Draw gender detection results live if available
+            if self.gender_detector is not None and self.gender_detector.model_loaded:
+                results = self.gender_detector.detect_gender(frame_bgr)
+                frame = self.gender_detector.draw_results(frame, results)
+            
+            return frame, {
+                "user_size_shirt": "--",
+                "user_size_pant": "--",
+                "item_type": "Shirt",
+                "filename": self.get_current_shirt_name(),
+                "countdown": 0,
+                "gender_countdown": remaining,
+                "detected_gender": None,
+                "state": "GENDER_COUNTDOWN",
+                "size_locked": False,
+                "distance_valid": False,
+                "distance_warning": "",
+                "distance_warning_color": "white",
+            }
+        
+        # --- Normal size detection flow (only reached if Male confirmed) ---
         # Update countdown state
         countdown = self._update_countdown()
         
@@ -552,14 +783,14 @@ class TryOnEngine:
                 
                 # Detect SHIRT size
                 if shoulder_w > 10 and torso_h > 10:
-                    shirt_predicted = self._predict_size(shoulder_w, torso_h, is_pants=False)
+                    shirt_predicted = self._predict_size(shoulder_w, torso_h, hip_w, leg_h, is_pants=False)
                     self.locked_shirt_size = shirt_predicted
                     ratio_shirt = shoulder_w / torso_h
                     print(f"[OK] SHIRT SIZE DETECTED: {shirt_predicted} (shoulder_w={shoulder_w}, torso_h={torso_h}, ratio={ratio_shirt:.3f})", flush=True)
                 
                 # Detect PANT size
                 if hip_w > 10 and leg_h > 10:
-                    pant_predicted = self._predict_size(hip_w, leg_h, is_pants=True)
+                    pant_predicted = self._predict_size(shoulder_w, torso_h, hip_w, leg_h, is_pants=True)
                     self.locked_pant_size = pant_predicted
                     ratio_pant = hip_w / leg_h
                     print(f"[OK] PANT SIZE DETECTED: {pant_predicted} (hip_w={hip_w}, leg_h={leg_h}, ratio={ratio_pant:.3f})", flush=True)
@@ -584,7 +815,7 @@ class TryOnEngine:
                     leg_h = int(((lky + rky) // 2) - ((lhy + rhy) // 2))
 
                     if hip_w > 10 and leg_h > 10:
-                        preset = SIZE_PRESETS.get(self.locked_pant_size, SIZE_PRESETS["M"])
+                        preset = SIZE_PRESETS.get(self.locked_pant_size, SIZE_PRESETS["32"])
                         target_w = int(hip_w * preset["width_scale"])
                         target_h = int(leg_h * preset["height_scale"])
                         resized = cv2.resize(shirt_rgba, (target_w, target_h), interpolation=cv2.INTER_AREA)
@@ -624,6 +855,8 @@ class TryOnEngine:
             "item_type": "Pant/Short" if is_pants else "Shirt",
             "filename": self.get_current_shirt_name(),
             "countdown": countdown,
+            "gender_countdown": 0,
+            "detected_gender": self.detected_gender,
             "state": self.display_state,
             "size_locked": self.is_size_locked,
             "distance_valid": self.is_distance_valid,
