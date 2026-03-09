@@ -604,29 +604,39 @@ class TryOnEngine:
         return self._predict_size_fallback(shoulder_w, torso_h, hip_w, leg_h, is_pants)
 
     def _predict_size_fallback(self, shoulder_w, torso_h, hip_w, leg_h, is_pants=False):
-        """Rule-based size prediction fallback (original hardcoded thresholds)."""
+        """
+        Rule-based size prediction fallback.
+        
+        Thresholds are calibrated to match the ML model's decision boundaries
+        which are based on realistic MediaPipe ratio distributions.
+        """
         if is_pants:
             ratio = hip_w / (leg_h + 1e-6)
-            ratio = float(np.clip(ratio, 0.15, 0.50))
-            if ratio < 0.18:
+            ratio = float(np.clip(ratio, 0.20, 0.70))  # Expanded range for realistic values
+            print(f"[FALLBACK] Pant ratio (hip_w/leg_h): {ratio:.3f}")
+            # Thresholds calibrated to realistic MediaPipe ratios
+            if ratio < 0.32:
                 return "28"
-            elif ratio < 0.22:
-                return "30"
-            elif ratio < 0.27:
-                return "32"
-            elif ratio < 0.32:
-                return "34"
             elif ratio < 0.38:
+                return "30"
+            elif ratio < 0.44:
+                return "32"
+            elif ratio < 0.50:
+                return "34"
+            elif ratio < 0.58:
                 return "36"
             return "38"
         else:
             ratio = shoulder_w / (torso_h + 1e-6)
-            ratio = float(np.clip(ratio, 0.55, 0.85))
-            if ratio < 0.60:
+            ratio = float(np.clip(ratio, 0.50, 1.30))  # Expanded range for realistic MediaPipe values
+            print(f"[FALLBACK] Shirt ratio (shoulder_w/torso_h): {ratio:.3f}")
+            # Thresholds aligned with ML model decision boundaries
+            # ML model: S < 0.80, M 0.80-0.90, L 0.90-1.00, XL > 1.00
+            if ratio < 0.80:
                 return "S"
-            elif ratio < 0.67:
+            elif ratio < 0.90:
                 return "M"
-            elif ratio < 0.75:
+            elif ratio < 1.00:
                 return "L"
             return "XL"
         
